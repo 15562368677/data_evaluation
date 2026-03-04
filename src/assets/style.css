@@ -1,0 +1,308 @@
+/* =========================================
+   AI 产品风格 - 纯白简约
+   ========================================= */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: #f5f5f5;
+  color: #1a1a1a;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 滚动条 ── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d0d0d0;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b0b0b0;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d0d0d0 transparent;
+}
+
+/* ── 侧边栏 ── */
+.sidebar {
+  background: #ffffff;
+  border-right: 1px solid #eaeaea;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-brand {
+  font-size: 17px;
+  font-weight: 700;
+  color: #1a1a1a;
+  padding: 0 4px 18px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #eaeaea;
+  letter-spacing: -0.3px;
+}
+
+.sidebar .nav-pills .nav-link {
+  color: #666 !important;
+  font-size: 15px;
+  font-weight: 500;
+  padding: 11px 16px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar .nav-pills .nav-link:hover {
+  color: #1a1a1a !important;
+  background: #ffffff;
+  border-color: #d1d5db;
+}
+
+.sidebar .nav-pills .nav-link.active {
+  color: #1a1a1a !important;
+  background: #e5e7eb;
+  border-color: #d1d5db;
+  font-weight: 600;
+}
+
+/* ── 筛选栏 ── */
+.filter-bar {
+  background: #ffffff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin-bottom: 20px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.filter-bar label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 6px;
+  display: block;
+}
+
+.search-btn {
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  color: #1a1a1a !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.search-btn:hover,
+.search-btn:focus {
+  background: #ffffff !important;
+  border-color: #9ca3af !important;
+  color: #111827 !important;
+  box-shadow: none !important;
+}
+
+.search-btn.search-btn-clicked,
+.search-btn.search-btn-clicked:hover,
+.search-btn.search-btn-clicked:focus {
+  background: #e5e7eb !important;
+  border-color: #d1d5db !important;
+  color: #1a1a1a !important;
+  box-shadow: none !important;
+}
+
+/* ── 内容卡片 ── */
+.card-container {
+  background: #ffffff;
+  border: 1px solid #eaeaea;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+/* ── Dropdown ── */
+.Select-control,
+.Select-multi-value-wrapper,
+.Select-placeholder,
+.Select-value-label,
+.Select-input>input {
+  color: #1a1a1a !important;
+}
+
+.Select-control {
+  background-color: #fafafa !important;
+  border-color: #e0e0e0 !important;
+  border-radius: 8px !important;
+  min-height: 38px;
+}
+
+.Select-menu-outer {
+  background-color: #fff !important;
+  border-color: #e0e0e0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08) !important;
+}
+
+.VirtualizedSelectOption {
+  color: #1a1a1a !important;
+}
+
+.VirtualizedSelectFocusedOption {
+  background-color: #f0f4ff !important;
+}
+
+/* ── DatePicker ── */
+.DateRangePicker {
+  display: block !important;
+  width: 100% !important;
+}
+
+.DateRangePickerInput {
+  background-color: #fafafa !important;
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 8px !important;
+  display: flex !important;
+  align-items: center !important;
+  height: 38px !important;
+  padding: 0 30px 0 10px !important;
+  /* Right padding for clear button */
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+/* 去除输入框默认样式，使其融入容器 */
+.DateInput {
+  background: transparent !important;
+  width: 90px !important;
+  /* 调整宽度以适应内容 */
+  flex-grow: 1 !important;
+}
+
+.DateInput_input {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  font-size: 13px !important;
+  color: #1a1a1a !important;
+  text-align: center !important;
+  line-height: 36px !important;
+  /* 垂直居中 */
+  height: 100% !important;
+}
+
+.DateInput_input::placeholder {
+  color: #999 !important;
+}
+
+/* 聚焦时的高亮效果（加在容器上会更顺眼，但 React-Dates 结构限制，只能尽量简化） */
+.DateInput_input__focused {
+  border-bottom: 2px solid #1a73e8 !important;
+}
+
+/* 箭头图标 */
+.DateRangePickerInput_arrow {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 4px !important;
+}
+
+.DateRangePickerInput_arrow_svg {
+  fill: #999 !important;
+  height: 12px !important;
+  width: 12px !important;
+}
+
+/* 日期清除按钮 - 在 app.py 中定义了内联样式，这里补充 hover */
+#date-clear-btn:hover {
+  color: #e53e3e !important;
+}
+
+/* ── Slider ── */
+.rc-slider-rail {
+  background-color: #e0e0e0 !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+}
+
+.rc-slider-track {
+  background-color: #1a73e8 !important;
+  height: 6px !important;
+  border-radius: 3px !important;
+}
+
+.rc-slider-handle {
+  width: 16px !important;
+  height: 16px !important;
+  margin-top: -5px !important;
+  background-color: #fff !important;
+  border: 2px solid #1a73e8 !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15) !important;
+  opacity: 1 !important;
+}
+
+.rc-slider-handle:hover,
+.rc-slider-handle:focus,
+.rc-slider-handle:active {
+  border-color: #1a73e8 !important;
+  box-shadow: 0 0 0 4px rgba(26, 115, 232, 0.15) !important;
+}
+
+.rc-slider-tooltip-inner {
+  background-color: #333 !important;
+  color: #fff !important;
+  padding: 4px 8px !important;
+  border-radius: 4px !important;
+  font-size: 12px !important;
+}
+
+.rc-slider-mark-text {
+  color: #999 !important;
+  font-size: 11px !important;
+}
+
+/* ── Plotly ── */
+.js-plotly-plot,
+.plotly,
+.plot-container,
+.dash-graph,
+.dash-graph>div {
+  background-color: transparent !important;
+  background: transparent !important;
+}
+
+.js-plotly-plot .main-svg,
+.js-plotly-plot .main-svg .bglayer,
+.js-plotly-plot .main-svg .bglayer rect {
+  fill: transparent !important;
+}
+
+.js-plotly-plot .plotly .modebar {
+  right: 8px !important;
+  top: 4px !important;
+}
+
+/* ── Loading ── */
+._dash-loading-callback {
+  opacity: 0.4;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
