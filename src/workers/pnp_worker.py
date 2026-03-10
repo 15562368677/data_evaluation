@@ -64,7 +64,7 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO batches (uniq_id, task_id, sample_ratio, is_overwrite, parameters)
+                INSERT INTO pnp_batches (uniq_id, task_id, sample_ratio, is_overwrite, parameters)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (uniq_id) DO NOTHING
             """, (uniq_id, task_id, sample_ratio, overwrite, json.dumps(params_dict)))
@@ -93,6 +93,17 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     # Retrieve episodes
     episodes_df = query_df("SELECT id FROM episodes WHERE task_id = %s", (task_id,))
     total_episodes = [str(e) for e in episodes_df['id'].tolist()]
+    
+    # Exclude episodes marked as invalid in duration_results
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT episode_id FROM duration_results WHERE task_id = %s AND duration_result = 'invalid'", (task_id,))
+            invalid_duration_episodes = set(row[0] for row in cur.fetchall())
+        if invalid_duration_episodes:
+            logging.info(f"Excluding {len(invalid_duration_episodes)} episodes marked as invalid in duration check.")
+            total_episodes = [ep for ep in total_episodes if ep not in invalid_duration_episodes]
+    except Exception as e:
+        logging.warning(f"Failed to filter invalid duration episodes: {e}")
     
     # Apply overwrite rule
     if not overwrite:

@@ -156,7 +156,7 @@ def register_callbacks(app):
         sql = f"""
             SELECT b.uniq_id, b.task_id, b.sample_ratio, b.created_at,
                    COUNT(p.episode_id) as processed_count
-            FROM batches b
+            FROM pnp_batches b
             LEFT JOIN pnp_streams p ON b.uniq_id = p.batch_id
             {where_clause}
             GROUP BY b.uniq_id, b.task_id, b.sample_ratio, b.created_at

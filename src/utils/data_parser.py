@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pandas as pd
 from PIL import Image
+import pyarrow.parquet as pq
 
 from src.utils.s3_client import download_s3_file, s3_object_exists, generate_presigned_url
 
@@ -152,43 +153,69 @@ def resolve_joint_paths(file_path: str) -> dict:
 
 
 def parquet_to_mp4(parquet_path: Path) -> Path | None:
-    """将 parquet 中的图像数据转换为 mp4 视频文件。"""
+    """将 parquet 中的图像数据转换为 mp4 视频文件，直接通过管道调用 ffmpeg 进行硬件加速/高效率转码。"""
+    import subprocess
+    import os
     try:
-        df = pd.read_parquet(parquet_path)
-        if df.empty:
-            return None
-
+        pf = pq.ParquetFile(parquet_path)
+        
         # 找到图像列
         img_col = None
-        for col in df.columns:
+        for col in pf.schema_arrow.names:
             if "camera_top" in col and col != "timestamp_utc":
                 img_col = col
                 break
+        
         if img_col is None:
             return None
 
-        # 解码第一帧获取尺寸
-        first_img = Image.open(io.BytesIO(df.iloc[0][img_col]))
-        w, h = first_img.size
-
-        # 创建临时 mp4 文件
         mp4_path = parquet_path.with_suffix(".mp4")
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        fps = 30  # 默认帧率
-        writer = cv2.VideoWriter(str(mp4_path), fourcc, fps, (w, h))
+        if mp4_path.exists():
+            return mp4_path # return immediately if already converted
 
-        for i in range(len(df)):
-            img_data = df.iloc[i][img_col]
-            img = Image.open(io.BytesIO(img_data))
-            frame = np.array(img)
-            if len(frame.shape) == 3 and frame.shape[2] == 3:
-                frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            writer.write(frame)
-
-        writer.release()
-        return mp4_path
+        tmp_mp4_path = parquet_path.with_suffix(".tmp.mp4")
+        
+        # JPEG image sequence into ffmpeg directly
+        process = subprocess.Popen([
+            "ffmpeg", "-y", 
+            "-f", "image2pipe", 
+            "-vcodec", "mjpeg", 
+            "-r", "30",
+            "-i", "-",
+            "-c:v", "libx264", 
+            "-pix_fmt", "yuv420p", 
+            "-preset", "superfast",
+            "-crf", "23",
+            str(tmp_mp4_path)
+        ], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        try:
+            for batch in pf.iter_batches(batch_size=200, columns=[img_col]):
+                for val in batch.column(0):
+                    if val.is_valid:
+                        # 对于 PyArrow 的 ListScalar UInt8Array，可以用 to_numpy().tobytes()
+                        try:
+                            process.stdin.write(val.values.to_numpy().tobytes())
+                        except Exception:
+                            # 容错：有些数据格式可能是 pandas 解析后的 list，可以直接转 bytes
+                            process.stdin.write(bytes(val.as_py()))
+            
+            process.stdin.close()
+            process.wait()
+            
+            if process.returncode == 0:
+                os.rename(str(tmp_mp4_path), str(mp4_path))
+                return mp4_path
+            else:
+                return None
+        except Exception as e:
+            process.kill()
+            raise e
+            
     except Exception as e:
         print(f"[Parser] parquet 转 mp4 失败: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

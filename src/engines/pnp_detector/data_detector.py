@@ -180,10 +180,9 @@ def check_joint_diff_with_slope(
     slope_threshold = config['slope_threshold']
     slope_lookahead = config['slope_lookahead']
     
-    # 预先转换时间戳用于对齐
-    state_timestamps = pd.to_datetime(state_df['timestamp_utc'])
-    action_timestamps = pd.to_datetime(action_df['timestamp_utc'])
-    
+    # We no longer need to recalculate nearest action frames because the joint_differences
+    # array already represents (action_aligned - state_aligned) computed via merge_asof.
+    # Therefore, action_aligned_val = state_val + diff_val
     for joint in finger_joints:
         if joint not in joint_differences:
             continue
@@ -230,17 +229,11 @@ def check_joint_diff_with_slope(
                         if state_slope > slope_threshold:
                             slope_stable = False
                     
-                    # Action slope (timestamp aligned)
+                    # Action slope (implied from aligned diffs)
                     if slope_stable:
-                        state_end_ts = state_timestamps.iloc[end_idx]
-                        state_start_ts = state_timestamps.iloc[start_idx]
-                        
-                        # Find closest action frames
-                        action_end_idx = np.argmin(np.abs(action_timestamps - state_end_ts))
-                        action_start_idx = np.argmin(np.abs(action_timestamps - state_start_ts))
-                        
-                        action_end_val = action_df[joint].iloc[action_end_idx]
-                        action_start_val = action_df[joint].iloc[action_start_idx]
+                        # Since diffs[idx] = action_val - state_val, we have action_val = state_val + diffs[idx]
+                        action_end_val = state_end_val + diffs[end_idx]
+                        action_start_val = state_start_val + diffs[start_idx]
                         
                         if not np.isnan(action_end_val) and not np.isnan(action_start_val):
                             action_slope = np.abs(action_end_val - action_start_val) / diff_step

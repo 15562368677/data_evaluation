@@ -50,9 +50,10 @@ def register_callbacks(app):
     @app.callback(
         Output("pnp-modal-task-search", "options"),
         Input("pnp-modal-task-search", "search_value"),
+        State("pnp-modal-task-search", "value"),
         prevent_initial_call=False,
     )
-    def load_modal_task_options(search_value):
+    def load_modal_task_options(search_value, current_value):
         """弹窗内加载任务列表。"""
         try:
             if search_value:
@@ -72,7 +73,25 @@ def register_callbacks(app):
                     LIMIT 100
                 """
                 df = query_df(sql)
-            return [{"label": str(t), "value": str(t)} for t in df["task_id"]]
+
+            options = [{"label": str(t), "value": str(t)} for t in df["task_id"]]
+
+            # 关键：搜索变化导致 options 刷新时，必须把已选项保留在 options 中，
+            # 否则前端组件会把不在 options 内的 value 自动移除。
+            if isinstance(current_value, list):
+                selected_values = [str(v) for v in current_value if v is not None]
+            elif current_value is None:
+                selected_values = []
+            else:
+                selected_values = [str(current_value)]
+
+            existed = {str(opt["value"]) for opt in options}
+            for v in selected_values:
+                if v not in existed:
+                    options.append({"label": v, "value": v})
+                    existed.add(v)
+
+            return options
         except Exception:
             return []
 
@@ -140,7 +159,7 @@ def register_callbacks(app):
     # ── 回调4：点击加载按钮 → 下载数据 ──
     @app.callback(
         [
-            Output("pnp-video-url", "data"),
+            Output("pnp-video-file-path-store", "data"),
             Output("pnp-joint-data", "data"),
             Output("pnp-status-msg", "children"),
         ],
@@ -149,7 +168,7 @@ def register_callbacks(app):
         prevent_initial_call=True,
     )
     def load_episode_data(n_clicks, episode_id):
-        """加载选中记录的视频和关节数据。"""
+        """加载选中记录的关节数据。并将路径发送给视频加载回调。"""
         if not n_clicks or not episode_id:
             return no_update, no_update, html.Div(
                 "请先选择一条记录",
@@ -179,19 +198,9 @@ def register_callbacks(app):
                 style={"color": "#ef4444", "fontSize": "13px"},
             )
 
-        # 获取视频 URL
         status_parts = []
-        video_url = None
-        try:
-            video_url = get_video_url(file_path)
-            if video_url:
-                status_parts.append("✅ 视频数据已加载")
-            else:
-                status_parts.append("⚠️ 未找到视频数据")
-        except Exception as e:
-            status_parts.append(f"❌ 视频加载失败: {e}")
-
-        # 获取关节数据
+        
+        # 获取关节数据 (快)
         joint_data = None
         try:
             joint_data = load_joint_data(file_path)
@@ -204,12 +213,33 @@ def register_callbacks(app):
         except Exception as e:
             status_parts.append(f"❌ 关节数据加载失败: {e}")
 
+        status_parts.append("⏳ 视频文件正在后台处理转码，请耐心等候...")
+
         status_msg = html.Div(
             [html.Div(s, style={"fontSize": "13px", "marginBottom": "2px"}) for s in status_parts],
             style={"color": "#374151"},
         )
 
-        return video_url, joint_data, status_msg
+        return file_path, joint_data, status_msg
+
+    # ── 回调4.5：后台加载视频 ──
+    @app.callback(
+        Output("pnp-video-url", "data"),
+        Input("pnp-video-file-path-store", "data"),
+        prevent_initial_call=True,
+    )
+    def load_video_data(file_path):
+        if not file_path:
+            return no_update
+
+        # 获取视频 URL (可能耗时数十秒)
+        try:
+            video_url = get_video_url(file_path)
+            if video_url:
+                return video_url
+        except Exception as e:
+            pass
+        return None
 
     # ── 回调5：视频 URL 变化 → 更新视频播放器 ──
     @app.callback(
@@ -570,17 +600,28 @@ def register_callbacks(app):
         [
             State("pnp-submit-modal", "is_open"),
             State("pnp-task-search", "value"),
+            State("pnp-modal-single-task", "value"),
         ] + param_states,
         prevent_initial_call=True
     )
-    def toggle_modal(open_clicks, close_clicks, confirm_clicks, is_open, current_task, *param_values):
+    def toggle_modal(open_clicks, close_clicks, confirm_clicks, is_open, current_task, is_single, *param_values):
         trigger_id = ctx.triggered_id
 
         if trigger_id == "pnp-open-modal-btn":
             # 组合参数用于显示
             params_dict = dict(zip(param_keys, param_values))
             display_text = json.dumps(params_dict, indent=2, ensure_ascii=False)
-            return True, display_text, current_task
+            # dcc.Dropdown 在 multi=True 时 value 必须是 list，否则会导致多选行为异常。
+            if is_single:
+                modal_task_value = current_task
+            else:
+                if current_task is None:
+                    modal_task_value = []
+                elif isinstance(current_task, list):
+                    modal_task_value = current_task
+                else:
+                    modal_task_value = [current_task]
+            return True, display_text, modal_task_value
         
         if trigger_id == "pnp-modal-close-btn":
             return False, no_update, no_update
@@ -591,12 +632,29 @@ def register_callbacks(app):
 
         return is_open, no_update, no_update
 
+    # ── 回调8.5：单条/多条任务模式切换 ──
+    @app.callback(
+        [
+            Output("pnp-modal-uniq-id-container", "style"),
+            Output("pnp-modal-task-search", "multi"),
+            Output("pnp-modal-task-search", "value", allow_duplicate=True),
+        ],
+        Input("pnp-modal-single-task", "value"),
+        prevent_initial_call=True
+    )
+    def toggle_single_task_mode(is_single):
+        if is_single:
+            return {"display": "block"}, False, None
+        else:
+            return {"display": "none"}, True, []
+
     # ── 回调9：提交检测到 Worker Queue ──
     import dash_bootstrap_components as dbc
     @app.callback(
         Output("pnp-global-toast-container", "children"),
         Input("pnp-modal-confirm-btn", "n_clicks"),
         [
+            State("pnp-modal-single-task", "value"),
             State("pnp-modal-uniq-id", "value"),
             State("pnp-modal-task-search", "value"),
             State("pnp-modal-sample-ratio", "value"),
@@ -604,12 +662,22 @@ def register_callbacks(app):
         ] + param_states,
         prevent_initial_call=True
     )
-    def submit_pnp_detection(n_clicks, uniq_id, task_id, sample_ratio, overwrite, *param_values):
+    def submit_pnp_detection(n_clicks, is_single, uniq_id, task_id, sample_ratio, overwrite, *param_values):
         if not n_clicks:
             return no_update
 
+        if is_single:
+            task_ids = [task_id] if task_id else []
+        else:
+            if task_id is None:
+                task_ids = []
+            elif isinstance(task_id, list):
+                task_ids = task_id
+            else:
+                task_ids = [task_id]
+
         # 输入检查
-        if not task_id:
+        if len(task_ids) == 0:
             return dbc.Toast(
                 "请先选择需要检测的任务 ID",
                 id="toast-error",
@@ -620,20 +688,18 @@ def register_callbacks(app):
                 duration=4000
             )
 
-        if not uniq_id:
-            uniq_id = f"{task_id}_{int(time.time())}"
-
         if sample_ratio is None:
             sample_ratio = 0
 
         # 获取参数字典
         params_dict = dict(zip(param_keys, param_values))
 
-        # 将任务提交到 Queue
         try:
             from rq import Queue
             from redis import Redis
             import os
+            import random
+            from datetime import datetime
             from dotenv import load_dotenv
             from src.workers.pnp_worker import run_pnp_task
 
@@ -649,14 +715,27 @@ def register_callbacks(app):
                 db=redis_db, 
                 password=redis_password
             ))
-            job = q.enqueue(
-                run_pnp_task,
-                args=(uniq_id, task_id, sample_ratio, overwrite, params_dict),
-                job_timeout=3600 # 默认为1小时，防超时
-            )
+
+            pushed_count = 0
+            for t_id in task_ids:
+                if is_single and uniq_id:
+                    u_id = uniq_id
+                else:
+                    date_str = datetime.now().strftime("%Y%m%d")
+                    random_str = str(random.randint(1000, 9999))
+                    u_id = f"{t_id}_{random_str}_{date_str}"
+                
+                job = q.enqueue(
+                    run_pnp_task,
+                    args=(u_id, t_id, sample_ratio, overwrite, params_dict),
+                    job_timeout=3600 # 默认为1小时，防超时
+                )
+                pushed_count += 1
+                
+            msg = f"已成功提交 {pushed_count} 个批次检测。\n后台检测中，请稍后查看结果库。"
             return dbc.Toast(
-                f"任务提交成功！(Uniq ID: {uniq_id})\n后台检测中，请稍后查看结果库。",
-                id=f"toast-success-{uniq_id}",
+                msg,
+                id=f"toast-success-{time.time()}",
                 header="提交成功",
                 is_open=True,
                 dismissable=True,
@@ -673,5 +752,3 @@ def register_callbacks(app):
                 icon="danger",
                 duration=5000
             )
-
-

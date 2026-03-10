@@ -143,6 +143,7 @@ def layout():
             dcc.Store(id="pnp-episode-data"),
             dcc.Store(id="pnp-joint-data"),
             dcc.Store(id="pnp-video-url"),
+            dcc.Store(id="pnp-video-file-path-store"),
             dcc.Interval(id="pnp-sync-interval", interval=120, n_intervals=0),
 
             # 弹窗 (Modal)
@@ -153,9 +154,20 @@ def layout():
                         [
                             html.Div(
                                 [
-                                    html.Label("Uniq ID (为空则自动生成)", style={"fontSize": "12px", "fontWeight": "600"}),
-                                    dcc.Input(id="pnp-modal-uniq-id", type="text", placeholder="请输入...",
-                                              style={"width": "100%", "marginBottom": "16px", "height": "32px", "borderRadius": "4px", "border": "1px solid #ccc", "padding": "0 8px"}),
+                                    dbc.Checkbox(
+                                        id="pnp-modal-single-task",
+                                        label="单条任务 (切换多条时自动生成 Uniq ID)",
+                                        value=True,
+                                        style={"marginBottom": "8px", "fontWeight": "bold"}
+                                    ),
+                                    html.Div(
+                                        id="pnp-modal-uniq-id-container",
+                                        children=[
+                                            html.Label("Uniq ID (为空则自动生成)", style={"fontSize": "12px", "fontWeight": "600"}),
+                                            dcc.Input(id="pnp-modal-uniq-id", type="text", placeholder="请输入...",
+                                                      style={"width": "100%", "marginBottom": "16px", "height": "32px", "borderRadius": "4px", "border": "1px solid #ccc", "padding": "0 8px"}),
+                                        ]
+                                    ),
                                     
                                     html.Label("任务 ID", style={"fontSize": "12px", "fontWeight": "600"}),
                                     dcc.Dropdown(
@@ -164,6 +176,7 @@ def layout():
                                         placeholder="搜索或选择任务...",
                                         clearable=True,
                                         searchable=True,
+                                        multi=False,
                                     ),
                                     html.Div(style={"marginBottom": "16px"}),
 

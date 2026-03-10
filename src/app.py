@@ -6,8 +6,9 @@ from dash import html, dcc, Input, Output, State, no_update, ctx
 import dash_bootstrap_components as dbc
 
 from src.utils.source_db import query_df
-from src.utils.result_db import init_duration_result_db
-from src.ui import pilot, pnp, pnp_result, duration_check
+
+from src.utils.result_db import init_duration_result_db, init_pnp_result_db
+from src.ui import pilot, pnp, pnp_result, duration_check, pnp_check
 
 app = dash.Dash(
     __name__,
@@ -18,6 +19,7 @@ app = dash.Dash(
 
 # 初始化 duration_result 表
 init_duration_result_db()
+init_pnp_result_db()
 
 
 def load_initial_pilots():
@@ -79,6 +81,13 @@ sidebar = html.Div(
                                     "PnP 结果",
                                     href="/pnp_result",
                                     id="nav-pnp-result",
+                                    active="exact",
+                                    style={"paddingLeft": "2.5rem"},
+                                ),
+                                dbc.NavLink(
+                                    "PnP 筛选",
+                                    href="/pnp_check",
+                                    id="nav-pnp-check",
                                     active="exact",
                                     style={"paddingLeft": "2.5rem"},
                                 ),
@@ -217,6 +226,8 @@ def render_page(pathname):
         return pnp.layout(), {"display": "none"}
     if pathname == "/pnp_result":
         return pnp_result.layout(), {"display": "none"}
+    if pathname == "/pnp_check":
+        return pnp_check.layout(), {"display": "none"}
     return html.Div(
         "页面未找到",
         style={"padding": "60px", "textAlign": "center", "color": "#999"},
@@ -435,6 +446,7 @@ pilot.register_callbacks(app)
 pnp.register_callbacks(app)
 pnp_result.register_callbacks(app)
 duration_check.register_callbacks(app)
+pnp_check.register_callbacks(app)
 
 @app.callback(
     Output("pnp-folder-collapse", "is_open"),

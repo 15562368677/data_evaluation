@@ -41,11 +41,11 @@ def _duration_sort_key(value):
     return 1, sval
 
 
-def _build_checked_card(row, label):
+def _build_checked_card(row:dict,label:str):
     """构建已检测数据的只读卡片。"""
     episode_id = str(row.get("id", ""))
     task_id = str(row.get("task_id", ""))
-    duration_val = row.get("duration_sec", row.get("trajectory_duration", 0))
+    duration_val = row.get("trajectory_duration", 0)
     try:
         duration_text = f"{float(duration_val):.2f}s"
     except Exception:
@@ -118,17 +118,17 @@ def _build_checked_card(row, label):
     )
 
 
-def _build_duration_card(row, status_map):
+def _build_duration_card(row:dict, status_map:dict):
     """构建单条数据的卡片（用于左侧表格区域）。"""
     episode_id = str(row.get("id", ""))
     task_id = str(row.get("task_id", ""))
-    duration_val = row.get("duration_sec", row.get("trajectory_duration", 0))
+    duration_val = row.get("trajectory_duration", 0)
+    start_val = row.get("trajectory_start")
     try:
         duration_text = f"{float(duration_val):.2f}s"
     except Exception:
         duration_text = "未知"
 
-    start_val = row.get("trajectory_start")
     if pd.notnull(start_val):
         try:
             start_text = pd.to_datetime(start_val).strftime("%Y-%m-%d %H:%M:%S")
@@ -207,7 +207,7 @@ def _build_duration_card(row, status_map):
     )
 
 
-def _build_sidebar_row(item, group_status):
+def _build_sidebar_row(item:dict, group_status:str):
     ep_id = str(item.get("id", ""))
     task_id = str(item.get("task_id", ""))
     duration_sec = item.get("duration_sec", 0)
@@ -431,11 +431,14 @@ def _build_duration_distribution_figure(df, selected_range=None):
 
     slider_range = [lo, hi]
 
+    x_coords = [float(bin_edges[0])] + centers.tolist() + [float(bin_edges[-1])]
+    y_coords = [0.0] + hist_counts.tolist() + [0.0]
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=centers.tolist(),
-            y=hist_counts.tolist(),
+            x=x_coords,
+            y=y_coords,
             mode="lines",
             line=dict(color="#3b82f6", width=2.2, shape="spline"),
             fill="tozeroy",
@@ -1199,14 +1202,16 @@ def register_callbacks(app):
         min_v, lo, hi, max_v = limits
         patched_fig = Patch()
         
+        margin_v = max((max_v - min_v) * 0.05, 0.5)
+        
         if ctx.triggered_id == "duration-check-fast-anomaly-btn":
             if not fast_clicks:
                 return no_update, no_update
-            new_range = [min_v - 0.5, lo]
+            new_range = [min_v - margin_v, lo]
         elif ctx.triggered_id == "duration-check-slow-anomaly-btn":
             if not slow_clicks:
                 return no_update, no_update
-            new_range = [hi, max_v + 0.5]
+            new_range = [hi, max_v + margin_v]
         else:
             return no_update, no_update
             
