@@ -169,6 +169,42 @@ body {
   background-color: #f0f4ff !important;
 }
 
+/* ── PnP 筛选页下拉框尺寸优化 ── */
+#pnp-check-right-filter,
+#pnp-check-left-filter,
+#pnp-check-right-duration-filter,
+#pnp-check-left-duration-filter,
+#pnp-check-right-axis-filter,
+#pnp-check-left-axis-filter {
+  width: 320px;
+  max-width: 100%;
+}
+
+#pnp-check-right-filter .Select-control,
+#pnp-check-left-filter .Select-control,
+#pnp-check-right-duration-filter .Select-control,
+#pnp-check-left-duration-filter .Select-control,
+#pnp-check-right-axis-filter .Select-control,
+#pnp-check-left-axis-filter .Select-control {
+  min-height: 32px !important;
+}
+
+#pnp-check-right-filter .Select-placeholder,
+#pnp-check-left-filter .Select-placeholder,
+#pnp-check-right-duration-filter .Select-placeholder,
+#pnp-check-left-duration-filter .Select-placeholder,
+#pnp-check-right-axis-filter .Select-placeholder,
+#pnp-check-left-axis-filter .Select-placeholder,
+#pnp-check-right-filter .Select-value-label,
+#pnp-check-left-filter .Select-value-label,
+#pnp-check-right-duration-filter .Select-value-label,
+#pnp-check-left-duration-filter .Select-value-label,
+#pnp-check-right-axis-filter .Select-value-label,
+#pnp-check-left-axis-filter .Select-value-label {
+  line-height: 30px !important;
+  font-size: 13px !important;
+}
+
 /* ── DatePicker ── */
 .DateRangePicker {
   display: block !important;

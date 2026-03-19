@@ -31,6 +31,17 @@ def layout():
             dcc.Store(id="pnp-check-limits", data={"right_max": 10, "left_max": 10}),
             html.Button(id="pnp-check-load-more-btn", style={"display": "none"}, n_clicks=0),
             dcc.Store(id="pnp-check-selected-video", data=None),
+            dcc.Store(
+                id="pnp-check-applied-filters",
+                data={
+                    "r_count": [],
+                    "l_count": [],
+                    "r_duration": [],
+                    "l_duration": [],
+                    "r_axis": [],
+                    "l_axis": [],
+                },
+            ),
 
             # PnP 筛选界面
             html.Div(
@@ -44,16 +55,16 @@ def layout():
                             "color": "#111827",
                         },
                     ),
-                    # 顶部筛选框：选择 BATCH_ID
+                    # 顶部筛选框：选择 TASK_ID
                     html.Div(
                         [
                             html.Div(
                                 [
-                                    html.Label("批次 BATCH_ID", style={"fontWeight": "bold", "fontSize": "14px", "marginBottom": "6px"}),
+                                    html.Label("任务 TASK_ID", style={"fontWeight": "bold", "fontSize": "14px", "marginBottom": "6px"}),
                                     dcc.Dropdown(
                                         id="pnp-check-batch-dropdown",
                                         options=[],
-                                        placeholder="请选择 BATCH_ID（按时间排序）",
+                                        placeholder="请选择 TASK_ID",
                                         clearable=True,
                                         searchable=True,
                                     ),
@@ -62,7 +73,7 @@ def layout():
                             ),
                             html.Div(
                                 dbc.Button(
-                                    "加载批次",
+                                    "加载任务",
                                     id="pnp-check-load-batch-btn",
                                     n_clicks=0,
                                     className="w-100 search-btn",
@@ -80,53 +91,121 @@ def layout():
                             "display": "flex",
                             "gap": "12px",
                             "alignItems": "end",
-                            "marginBottom": "20px",
+                            "marginBottom": "10px",
                         },
                     ),
-
-                    # 左右手 PnP 次数筛选功能
                     html.Div(
+                        dbc.Button(
+                            "选择筛选标准",
+                            id="pnp-check-open-filter-modal-btn",
+                            n_clicks=0,
+                            color="secondary",
+                            outline=True,
+                            size="sm",
+                            style={"fontWeight": "600"},
+                        ),
+                        style={"marginBottom": "16px"},
+                    ),
+
+                    dbc.Modal(
                         [
-                            html.Div(
+                            dbc.ModalHeader(dbc.ModalTitle("选择筛选标准"), close_button=True),
+                            dbc.ModalBody(
                                 [
-                                    html.Label("右手 PnP 次数筛选", style={"fontWeight": "bold", "fontSize": "14px"}),
                                     html.Div(
-                                        dcc.Dropdown(
-                                            id="pnp-check-right-filter",
-                                            multi=True,
-                                            placeholder="请选择次数 (留空表示全部)",
-                                        ),
-                                        style={"paddingTop": "10px"}
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.Label("左手 PnP 次数筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-left-filter", multi=True, placeholder="请选择次数 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-left-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "140px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Label("右手 PnP 次数筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-right-filter", multi=True, placeholder="请选择次数 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-right-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "140px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                        ],
+                                        style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px", "marginBottom": "12px"},
                                     ),
-                                    dcc.Graph(
-                                        id="pnp-check-right-chart",
-                                        config={"displayModeBar": False},
-                                        style={"height": "140px", "marginTop": "10px"}
-                                    )
-                                ],
-                                style={"flex": "1", "paddingRight": "20px"}
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.Label("左手 PnP 持续时长离群筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-left-duration-filter", multi=True, placeholder="请选择离群类型 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-left-duration-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "120px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Label("右手 PnP 持续时长离群筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-right-duration-filter", multi=True, placeholder="请选择离群类型 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-right-duration-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "120px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                        ],
+                                        style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px", "marginBottom": "12px"},
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(
+                                                [
+                                                    html.Label("左手 PnP 时间轴离群筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-left-axis-filter", multi=True, placeholder="请选择离群类型 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-left-axis-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "120px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                            html.Div(
+                                                [
+                                                    html.Label("右手 PnP 时间轴离群筛选", style={"fontWeight": "bold", "fontSize": "13px", "marginBottom": "6px"}),
+                                                    dcc.Dropdown(id="pnp-check-right-axis-filter", multi=True, placeholder="请选择离群类型 (留空表示全部)"),
+                                                    dcc.Graph(
+                                                        id="pnp-check-right-axis-chart",
+                                                        config={"displayModeBar": False},
+                                                        style={"height": "120px", "marginTop": "8px"},
+                                                    ),
+                                                ]
+                                            ),
+                                        ],
+                                        style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "12px"},
+                                    ),
+                                ]
                             ),
-                            html.Div(
+                            dbc.ModalFooter(
                                 [
-                                    html.Label("左手 PnP 次数筛选", style={"fontWeight": "bold", "fontSize": "14px"}),
-                                    html.Div(
-                                        dcc.Dropdown(
-                                            id="pnp-check-left-filter",
-                                            multi=True,
-                                            placeholder="请选择次数 (留空表示全部)",
-                                        ),
-                                        style={"paddingTop": "10px"}
-                                    ),
-                                    dcc.Graph(
-                                        id="pnp-check-left-chart",
-                                        config={"displayModeBar": False},
-                                        style={"height": "140px", "marginTop": "10px"}
-                                    )
-                                ],
-                                style={"flex": "1", "paddingLeft": "20px"}
+                                    dbc.Button("取消", id="pnp-check-filter-modal-cancel-btn", color="secondary", outline=True),
+                                    dbc.Button("确定", id="pnp-check-filter-modal-confirm-btn", color="primary"),
+                                ]
                             ),
                         ],
-                        style={"display": "flex", "width": "100%", "marginBottom": "20px"}
+                        id="pnp-check-filter-modal",
+                        is_open=False,
+                        size="xl",
+                        centered=True,
                     ),
 
                     html.Div(id="pnp-check-query-message", style={"marginBottom": "8px", "fontSize": "12px", "color": "#6b7280"}),
@@ -164,16 +243,26 @@ def layout():
                     # 批量操作按钮行：合格，多次抓取，抓取不合格，无效
                     html.Div(
                         [
-                            dbc.Button("全部合格", id="pnp-check-all-pass-btn", color="success", outline=True, size="sm", style={"marginRight": "8px"}),
-                            dbc.Button("全部多次抓取", id="pnp-check-all-multi-btn", color="warning", outline=True, size="sm", style={"marginRight": "8px"}),
-                            dbc.Button("全部抓取不合格", id="pnp-check-all-fail-btn", color="danger", outline=True, size="sm", style={"marginRight": "8px"}),
-                            dbc.Button("全部无效", id="pnp-check-all-invalid-btn", color="secondary", outline=True, size="sm", style={"marginRight": "8px"}),
-                            dbc.Button("提交到侧边栏", id="pnp-check-submit-btn", color="primary", outline=True, size="sm", title="将已标记的数据提交到右侧侧边栏", style={"marginRight": "8px"}),
-                            dbc.Button("查看已检数据：0/0", id="pnp-check-toggle-checked-btn", color="dark", outline=True, size="sm", title="切换查看已检测/未检测数据"),
+                            html.Div(
+                                [
+                                    dbc.Button("全部合格", id="pnp-check-all-pass-btn", color="success", outline=True, size="sm", style={"marginRight": "8px"}),
+                                    dbc.Button("全部多次抓取", id="pnp-check-all-multi-btn", color="warning", outline=True, size="sm", style={"marginRight": "8px"}),
+                                    dbc.Button("全部抓取不合格", id="pnp-check-all-fail-btn", color="danger", outline=True, size="sm", style={"marginRight": "8px"}),
+                                    dbc.Button("全部无效", id="pnp-check-all-invalid-btn", color="secondary", outline=True, size="sm", style={"marginRight": "8px"}),
+                                    dbc.Button("查看已检数据：0/0", id="pnp-check-toggle-checked-btn", color="dark", outline=True, size="sm", title="切换查看已检测/未检测数据", style={"marginRight": "8px"}),
+                                    dbc.Button("提交到侧边栏", id="pnp-check-submit-btn", color="primary", outline=True, size="sm", title="将已标记的数据提交到右侧侧边栏", style={"marginLeft": "auto"}),
+                                ],
+                                style={
+                                    "display": "flex",
+                                    "alignItems": "center",
+                                },
+                            ),
+                            html.Div(),
                         ],
                         style={
-                            "display": "flex",
-                            "alignItems": "center",
+                            "display": "grid",
+                            "gridTemplateColumns": "1fr 320px",
+                            "gap": "12px",
                             "marginBottom": "10px",
                         },
                     ),
@@ -184,14 +273,18 @@ def layout():
                     html.Div(
                         [
                             html.Div(
-                                id="pnp-check-table-container",
+                                [
+                                    html.Div(
+                                        id="pnp-check-table-container",
+                                        style={"height": "100%", "overflowY": "auto"},
+                                    ),
+                                ],
                                 style={
                                     "border": "1px solid #e5e7eb",
                                     "borderRadius": "8px",
                                     "padding": "10px",
                                     "backgroundColor": "#fff",
                                     "height": "920px",
-                                    "overflowY": "auto",
                                 },
                             ),
                             html.Div(

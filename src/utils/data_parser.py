@@ -89,10 +89,13 @@ def resolve_video_path(file_path: str) -> dict:
     base = _extract_base_path(file_path)
 
     if fmt == 3:
-        # 格式3: 直接就是 mp4
+        # 格式3: 优先使用 mp4，若缺失则回退到 parquet（触发本地转码）
         mp4_key = f"{base}/top/rgb/video.mp4"
         if s3_object_exists(mp4_key):
             return {"type": "mp4", "key": mp4_key}
+        parquet_key = f"{base}/observation.images.camera_top.parquet"
+        if s3_object_exists(parquet_key):
+            return {"type": "parquet", "key": parquet_key}
         return None
 
     # 格式1和2: 先尝试 mp4，再回退 parquet
@@ -103,9 +106,17 @@ def resolve_video_path(file_path: str) -> dict:
     # 回退到 parquet
     if fmt == 1:
         parquet_key = file_path
+        # 防御性处理：depth parquet 不能直接转为 RGB 视频，优先切回 camera_top parquet
+        if parquet_key.endswith("observation.images.camera_top_depth.parquet"):
+            parquet_key = parquet_key.replace(
+                "observation.images.camera_top_depth.parquet",
+                "observation.images.camera_top.parquet",
+            )
     else:
         parts = file_path.rsplit("/", 1)
         filename = parts[-1] if len(parts) > 1 else file_path
+        if filename == "observation.images.camera_top_depth.parquet":
+            filename = "observation.images.camera_top.parquet"
         parquet_key = f"{base}/{filename}"
 
     if s3_object_exists(parquet_key):

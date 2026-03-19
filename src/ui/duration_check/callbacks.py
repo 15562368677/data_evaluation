@@ -16,7 +16,7 @@ from dash import Input, Output, State, ctx, dcc, html, ALL, no_update
 from src.utils.source_db import query_df
 from src.utils.data_parser import get_video_url
 from src.utils.redis_cache import get_cache, set_cache
-from src.utils.result_db import save_duration_results, query_checked_episodes
+from src.utils.result_db import save_duration_results, query_checked_episodes, delete_duration_results
 
 # ── 状态 / 标签常量 ──
 DURATION_STATUS_ORDER = ["pass", "fast", "slow", "invalid"]
@@ -770,9 +770,10 @@ def register_callbacks(app):
             return table_ui, visible_ids, summary, btn_label, True, page
 
         else:
-            # ── 已检模式：显示所有已检测的数据（不受时间轴限制） ──
+            # ── 已检模式：显示所有已检测的数据（支持继续编辑并重新提交） ──
             checked_rows = [r for r in all_data if str(r.get("id")) in checked_map]
             checked_rows.sort(key=lambda x: float(x.get("duration_sec", 0) or 0))
+            visible_ids = [str(x.get("id")) for x in checked_rows]
 
             if not checked_rows:
                 table_ui = html.Div(
@@ -781,13 +782,20 @@ def register_callbacks(app):
                 )
             else:
                 shown = checked_rows[:MAX_RENDER]
-                cards = [_build_checked_card(r, checked_map.get(str(r.get("id")), "pass")) for r in shown]
+                # 以数据库已检标签作为默认值，row_status 中的临时改动优先覆盖
+                effective_status = {
+                    str(r.get("id")): checked_map.get(str(r.get("id")), "pass")
+                    for r in checked_rows
+                }
+                if isinstance(row_status, dict):
+                    effective_status.update({str(k): v for k, v in row_status.items()})
+                cards = [_build_duration_card(r, effective_status) for r in shown]
                 if len(checked_rows) > MAX_RENDER:
                     cards.append(html.Div("往下滚动加载更多...", style={"textAlign": "center", "color": "#6b7280", "padding": "10px", "fontSize": "12px", "marginTop": "10px"}))
                 table_ui = html.Div(cards)
 
-            summary = f"当前数据源中包含 {len(checked_rows)} 条已检测数据。"
-            return table_ui, [], summary, btn_label, False, page
+            summary = f"当前数据源中包含 {len(checked_rows)} 条已检测数据（可继续修改并提交）。"
+            return table_ui, visible_ids, summary, btn_label, False, page
 
     app.clientside_callback(
         """
@@ -838,6 +846,50 @@ def register_callbacks(app):
         if not n_clicks:
             return no_update
         return not bool(current)
+
+    @app.callback(
+        Output("duration-check-clear-checked-btn", "style"),
+        Input("duration-check-show-checked", "data"),
+    )
+    def toggle_clear_checked_btn(show_checked):
+        if bool(show_checked):
+            return {"marginRight": "8px", "display": "inline-block"}
+        return {"marginRight": "8px", "display": "none"}
+
+    @app.callback(
+        [
+            Output("duration-check-action-message", "children", allow_duplicate=True),
+            Output("duration-check-query-data", "data", allow_duplicate=True),
+        ],
+        Input("duration-check-clear-checked-btn", "n_clicks"),
+        [
+            State("duration-check-query-data", "data"),
+            State("duration-check-show-checked", "data"),
+        ],
+        prevent_initial_call=True,
+    )
+    def clear_checked_records(n_clicks, all_data, show_checked):
+        if not n_clicks or not show_checked:
+            return no_update, no_update
+
+        all_data = all_data or []
+        all_ids = [str(r.get("id")) for r in all_data if r.get("id") is not None]
+        if not all_ids:
+            return html.Div("当前数据为空，无可清除记录。", style={"color": "#d97706", "fontSize": "13px"}), no_update
+
+        try:
+            checked_map = query_checked_episodes(all_ids)
+            checked_ids = [eid for eid in all_ids if eid in checked_map]
+            if not checked_ids:
+                return html.Div("当前范围内没有已检记录可清除。", style={"color": "#d97706", "fontSize": "13px"}), no_update
+
+            deleted = delete_duration_results(checked_ids)
+            return (
+                html.Div(f"已清除 {deleted} 条已检记录。", style={"color": "#10b981", "fontSize": "13px"}),
+                all_data,
+            )
+        except Exception as e:
+            return html.Div(f"清除失败: {e}", style={"color": "#dc2626", "fontSize": "13px"}), no_update
 
     # ─────────────────────────────────────────────
     # 单行标记状态
@@ -930,25 +982,21 @@ def register_callbacks(app):
         submitted = submitted or {"pass": [], "fast": [], "slow": [], "invalid": []}
         data_map = {str(d.get("id")): d for d in all_data or []}
 
-        # 已有的 episode_id 集合，用于去重
-        existing_ids = set()
-        for v in submitted.values():
-            if isinstance(v, list):
-                for item in v:
-                    existing_ids.add(str(item.get("id")))
-
         count = 0
         rem_status = {}
         for ep_id, status in row_status.items():
-            if status in submitted and ep_id in data_map and ep_id not in existing_ids:
+            if status in submitted and ep_id in data_map:
                 row = data_map[ep_id]
+                # 若该条已在侧边栏中，先从所有分组移除，确保可重新改标签后再提交
+                for k in submitted.keys():
+                    if isinstance(submitted.get(k), list):
+                        submitted[k] = [x for x in submitted[k] if str(x.get("id")) != ep_id]
                 # 只存必要字段，减小 localStorage 体积
                 submitted[status].append({
                     "id": str(row.get("id", "")),
                     "task_id": str(row.get("task_id", "")),
                     "duration_sec": row.get("duration_sec", 0),
                 })
-                existing_ids.add(ep_id)
                 count += 1
             elif status not in submitted:
                 rem_status[ep_id] = status

@@ -35,6 +35,12 @@ def init_pnp_db():
                 sample_ratio INT,
                 is_overwrite BOOLEAN,
                 parameters JSONB,
+                status VARCHAR(20) DEFAULT 'queued',
+                total_episodes INT DEFAULT 0,
+                processed_episodes INT DEFAULT 0,
+                failed_episodes INT DEFAULT 0,
+                last_heartbeat TIMESTAMP,
+                error_message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             """)
@@ -50,12 +56,33 @@ def init_pnp_db():
                 UNIQUE(episode_id, batch_id)
             );
             """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS pnp_failures (
+                id SERIAL PRIMARY KEY,
+                episode_id VARCHAR(255) NOT NULL,
+                batch_id VARCHAR(255) REFERENCES pnp_batches(uniq_id),
+                error_message TEXT,
+                failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(episode_id, batch_id)
+            );
+            """)
             
             # If the table already existed without these columns, add them
             cur.execute("""
             ALTER TABLE pnp_streams 
             ADD COLUMN IF NOT EXISTS right_pnp_result JSONB,
             ADD COLUMN IF NOT EXISTS left_pnp_result JSONB;
+            """)
+
+            # Backward-compatible migration for existing pnp_batches
+            cur.execute("""
+            ALTER TABLE pnp_batches
+            ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'queued',
+            ADD COLUMN IF NOT EXISTS total_episodes INT DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS processed_episodes INT DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS failed_episodes INT DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS last_heartbeat TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS error_message TEXT;
             """)
         conn.commit()
         conn.close()
@@ -149,6 +176,30 @@ def query_checked_episodes(episode_ids: list):
         label = row[1] if row[1] else "pass"
         result[ep_id] = label
     return result
+
+
+def delete_duration_results(episode_ids: list):
+    """按 episode_id 列表删除 duration_results 记录，返回删除条数。"""
+    if not episode_ids:
+        return 0
+
+    conn = get_pnp_connection()
+    deleted = 0
+    try:
+        with conn.cursor() as cur:
+            placeholders = ",".join(["%s"] * len(episode_ids))
+            cur.execute(
+                f"DELETE FROM duration_results WHERE episode_id IN ({placeholders})",
+                [str(eid) for eid in episode_ids],
+            )
+            deleted = cur.rowcount or 0
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return deleted
 
 def init_pnp_result_db():
     """初始化 pnp_results 表"""

@@ -3,7 +3,6 @@
 import time
 import json
 import logging
-import random
 import psycopg2
 import pandas as pd
 import numpy as np
@@ -64,10 +63,24 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     try:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO pnp_batches (uniq_id, task_id, sample_ratio, is_overwrite, parameters)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (uniq_id) DO NOTHING
+                INSERT INTO pnp_batches (
+                    uniq_id, task_id, sample_ratio, is_overwrite, parameters, status,
+                    total_episodes, processed_episodes, failed_episodes, last_heartbeat, error_message
+                )
+                VALUES (%s, %s, %s, %s, %s, 'queued', 0, 0, 0, CURRENT_TIMESTAMP, NULL)
+                ON CONFLICT (uniq_id) DO UPDATE SET
+                    task_id = EXCLUDED.task_id,
+                    sample_ratio = EXCLUDED.sample_ratio,
+                    is_overwrite = EXCLUDED.is_overwrite,
+                    parameters = EXCLUDED.parameters
             """, (uniq_id, task_id, sample_ratio, overwrite, json.dumps(params_dict)))
+            cur.execute("""
+                UPDATE pnp_batches
+                SET status = 'running',
+                    last_heartbeat = CURRENT_TIMESTAMP,
+                    error_message = NULL
+                WHERE uniq_id = %s
+            """, (uniq_id,))
         conn.commit()
     except Exception as e:
         conn.close()
@@ -91,44 +104,118 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     }
 
     # Retrieve episodes
-    episodes_df = query_df("SELECT id FROM episodes WHERE task_id = %s", (task_id,))
+    episodes_df = query_df(
+        """
+        SELECT id, trajectory_start
+        FROM episodes
+        WHERE task_id = %s
+          AND trajectory_duration IS NOT NULL
+          AND trajectory_duration > 0
+        ORDER BY trajectory_start NULLS LAST, id
+        """,
+        (task_id,),
+    )
     total_episodes = [str(e) for e in episodes_df['id'].tolist()]
     
-    # Exclude episodes marked as invalid in duration_results
+    # Exclude episodes marked as invalid in duration_results.
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT episode_id FROM duration_results WHERE task_id = %s AND duration_result = 'invalid'", (task_id,))
-            invalid_duration_episodes = set(row[0] for row in cur.fetchall())
-        if invalid_duration_episodes:
-            logging.info(f"Excluding {len(invalid_duration_episodes)} episodes marked as invalid in duration check.")
-            total_episodes = [ep for ep in total_episodes if ep not in invalid_duration_episodes]
+            cur.execute(
+                """
+                SELECT DISTINCT episode_id
+                FROM duration_results
+                WHERE duration_result = 'invalid'
+                  AND CAST(task_id AS TEXT) = %s
+                """,
+                (str(task_id),),
+            )
+            invalid_duration_episodes = {str(row[0]) for row in cur.fetchall()}
     except Exception as e:
-        logging.warning(f"Failed to filter invalid duration episodes: {e}")
+        conn.close()
+        raise RuntimeError(f"Failed to query invalid duration episodes for task_id={task_id}: {e}") from e
+
+    if invalid_duration_episodes:
+        before_invalid_filter = len(total_episodes)
+        total_episodes = [ep for ep in total_episodes if ep not in invalid_duration_episodes]
+        excluded_count = before_invalid_filter - len(total_episodes)
+        logging.info(
+            f"[PNP] task_id={task_id}: excluded invalid duration episodes = {excluded_count} "
+            f"(invalid_pool={len(invalid_duration_episodes)}, before={before_invalid_filter}, after={len(total_episodes)})"
+        )
     
     # Apply overwrite rule
     if not overwrite:
+        before_overwrite_filter = len(total_episodes)
         with conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT episode_id FROM pnp_streams")
+            # 继续同一批次时，不应把本批次已完成记录当作“已存在”过滤掉。
+            cur.execute(
+                "SELECT DISTINCT episode_id FROM pnp_streams WHERE batch_id <> %s",
+                (uniq_id,),
+            )
             existing = set(row[0] for row in cur.fetchall())
         total_episodes = [ep for ep in total_episodes if ep not in existing]
+        logging.info(
+            f"[PNP] task_id={task_id}: overwrite=false excluded existing episodes = "
+            f"{before_overwrite_filter - len(total_episodes)} (after={len(total_episodes)})"
+        )
 
-    if not total_episodes:
-        logging.info("No episodes left to process.")
-        conn.close()
-        return
-
-    # Sampling
+    # 按 trajectory_start 排序后顺序质检；sample_ratio 仅做“取前 N%”的顺序截断。
     if sample_ratio == 0:
         sample_count = 1
     else:
         sample_count = max(1, int(len(total_episodes) * sample_ratio / 100.0))
     
     if sample_count < len(total_episodes):
-        sampled_episodes = random.sample(total_episodes, sample_count)
+        sampled_episodes = total_episodes[:sample_count]
     else:
         sampled_episodes = total_episodes
 
-    logging.info(f"Will process {len(sampled_episodes)} episodes out of {len(total_episodes)}")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT episode_id FROM pnp_streams WHERE batch_id = %s",
+            (uniq_id,),
+        )
+        completed_in_batch = set(row[0] for row in cur.fetchall())
+
+    sampled_set = set(sampled_episodes)
+    already_done = len(sampled_set & completed_in_batch)
+    remaining_episodes = [ep for ep in sampled_episodes if ep not in completed_in_batch]
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE pnp_batches
+            SET total_episodes = %s,
+                processed_episodes = %s,
+                failed_episodes = 0,
+                last_heartbeat = CURRENT_TIMESTAMP
+            WHERE uniq_id = %s
+            """,
+            (len(sampled_episodes), already_done, uniq_id),
+        )
+    conn.commit()
+
+    if not sampled_episodes:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE pnp_batches
+                SET status = 'success',
+                    last_heartbeat = CURRENT_TIMESTAMP,
+                    error_message = NULL
+                WHERE uniq_id = %s
+                """,
+                (uniq_id,),
+            )
+        conn.commit()
+        conn.close()
+        logging.info("No episodes left to process for this batch.")
+        return
+
+    logging.info(
+        f"Will process {len(remaining_episodes)} episodes "
+        f"(already_done={already_done}, total_in_batch={len(sampled_episodes)})"
+    )
 
     def process_hand(st_df, ac_df, hand_config):
         closure_df = calculate_closure_metrics_from_dataframe(
@@ -183,10 +270,53 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
                 time_picks.append([float(p[0])/60.0, float(p[1])/60.0])
         return json.dumps(time_picks)
 
-    for episode_id in sampled_episodes:
+    failed_episodes = 0
+    last_error_message = None
+    processed_episodes = already_done
+
+    def _record_failure(cur, ep_id: str, err_msg: str):
+        cur.execute(
+            """
+            INSERT INTO pnp_failures (episode_id, batch_id, error_message, failed_at)
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (episode_id, batch_id)
+            DO UPDATE SET error_message = EXCLUDED.error_message, failed_at = CURRENT_TIMESTAMP
+            """,
+            (ep_id, uniq_id, err_msg),
+        )
+
+    stop_status = None
+    for episode_id in remaining_episodes:
+        # 支持页面控制：paused / stopping / stopped
+        with conn.cursor() as cur:
+            cur.execute("SELECT status FROM pnp_batches WHERE uniq_id = %s", (uniq_id,))
+            status_row = cur.fetchone()
+            current_status = str(status_row[0]) if status_row and status_row[0] is not None else "running"
+        if current_status == "paused":
+            stop_status = "paused"
+            break
+        if current_status in {"stopping", "stopped"}:
+            stop_status = "stopped"
+            break
+
         try:
             state_df, action_df = load_joint_data_as_dfs(episode_id, config_load)
             if state_df is None or action_df is None or len(state_df) == 0:
+                failed_episodes += 1
+                last_error_message = f"Episode {episode_id} has no valid joint data."
+                with conn.cursor() as cur:
+                    _record_failure(cur, episode_id, last_error_message)
+                    cur.execute(
+                        """
+                        UPDATE pnp_batches
+                        SET failed_episodes = COALESCE(failed_episodes, 0) + 1,
+                            last_heartbeat = CURRENT_TIMESTAMP,
+                            error_message = %s
+                        WHERE uniq_id = %s
+                        """,
+                        (last_error_message, uniq_id),
+                    )
+                conn.commit()
                 continue
                 
             if 'timestamp_utc' in state_df.columns and not pd.api.types.is_datetime64_any_dtype(state_df['timestamp_utc']):
@@ -206,15 +336,77 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
                     ON CONFLICT(episode_id, batch_id) 
                     DO UPDATE SET right_pnp_result = %s, left_pnp_result = %s, checked_at = CURRENT_TIMESTAMP
                 """, (episode_id, uniq_id, right_json, left_json, right_json, left_json))
+                cur.execute(
+                    "DELETE FROM pnp_failures WHERE episode_id = %s AND batch_id = %s",
+                    (episode_id, uniq_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE pnp_batches
+                    SET processed_episodes = COALESCE(processed_episodes, 0) + 1,
+                        last_heartbeat = CURRENT_TIMESTAMP
+                    WHERE uniq_id = %s
+                    """,
+                    (uniq_id,),
+                )
             conn.commit()
+            processed_episodes += 1
 
             logging.info(f"Processed episode {episode_id}, found R:{len(json.loads(right_json))} L:{len(json.loads(left_json))} pick-place operations.")
 
         except Exception as e:
             logging.error(f"Error processing episode {episode_id}: {e}")
             conn.rollback()
+            failed_episodes += 1
+            last_error_message = str(e)
+            with conn.cursor() as cur:
+                _record_failure(cur, episode_id, last_error_message)
+                cur.execute(
+                    """
+                    UPDATE pnp_batches
+                    SET failed_episodes = COALESCE(failed_episodes, 0) + 1,
+                        last_heartbeat = CURRENT_TIMESTAMP,
+                        error_message = %s
+                    WHERE uniq_id = %s
+                    """,
+                    (last_error_message, uniq_id),
+                )
+            conn.commit()
             continue
 
-    conn.close()
-    logging.info(f"Finished PNP task {uniq_id}.")
+    if stop_status in {"paused", "stopped"}:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE pnp_batches
+                SET status = %s,
+                    last_heartbeat = CURRENT_TIMESTAMP
+                WHERE uniq_id = %s
+                """,
+                (stop_status, uniq_id),
+            )
+        conn.commit()
+        conn.close()
+        logging.info(f"Stopped PNP task {uniq_id} with status={stop_status}.")
+        return
 
+    final_status = "success"
+    if failed_episodes > 0 and processed_episodes > 0:
+        final_status = "partial"
+    elif failed_episodes > 0 and processed_episodes == 0:
+        final_status = "failed"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE pnp_batches
+            SET status = %s,
+                last_heartbeat = CURRENT_TIMESTAMP,
+                error_message = %s
+            WHERE uniq_id = %s
+            """,
+            (final_status, last_error_message if failed_episodes > 0 else None, uniq_id),
+        )
+    conn.commit()
+    conn.close()
+    logging.info(f"Finished PNP task {uniq_id} with status={final_status}.")

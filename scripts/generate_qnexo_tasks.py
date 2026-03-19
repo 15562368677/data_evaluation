@@ -2,6 +2,9 @@ import json
 import os
 import re
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 数据库连接配置
 DB_CONFIG = {
@@ -15,7 +18,7 @@ DB_CONFIG = {
 # Qwen API 配置（官方 OpenAI 兼容方式）
 QWEN_API_KEY = os.getenv(
     "QWEN_API_KEY",
-    os.getenv("DASHSCOPE_API_KEY", "sk-bc4148025495476badfc33f19968fef1"),
+    os.getenv("DASHSCOPE_API_KEY"),
 )
 QWEN_BASE_URL = os.getenv(
     "QWEN_BASE_URL",

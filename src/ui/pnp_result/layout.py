@@ -8,6 +8,7 @@ def layout():
         dcc.Store(id="pnp-res-episode-page", data=1),
         dcc.Store(id="pnp-res-selected-batch", data=None),
         dcc.Store(id="pnp-res-selected-episode", data=None),
+        dcc.Store(id="pnp-res-show-failed", data=False),
         
         # Hidden buttons to trigger load more
         html.Button(id="pnp-res-batch-load-more-btn", style={"display": "none"}, n_clicks=0),
@@ -68,9 +69,23 @@ def layout():
                 # Episode List section
                 html.Div([
                     html.Div([
-                        html.H5("批次内 Episode 检测记录", style={"margin": "0", "color": "#111827", "fontWeight": "600", "fontSize": "16px"}),
+                        html.Div(
+                            [
+                                html.H5("批次内 Episode 检测记录", style={"margin": "0", "color": "#111827", "fontWeight": "600", "fontSize": "16px"}),
+                                dbc.Button(
+                                    "失败记录",
+                                    id="pnp-res-failed-toggle-btn",
+                                    color="danger",
+                                    outline=True,
+                                    size="sm",
+                                    style={"marginLeft": "10px"},
+                                ),
+                            ],
+                            style={"display": "flex", "alignItems": "center"},
+                        ),
                         html.Span("每次加载 20 条，滚动到底部继续加载", style={"fontSize": "12px", "color": "#6b7280"}),
                     ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "15px"}),
+                    html.Div(id="pnp-res-action-msg", style={"fontSize": "12px", "marginBottom": "8px"}),
                     
                     html.Div(
                         id="pnp-res-episode-list", 
@@ -98,7 +113,14 @@ def layout():
                 
                 # Search controls
                 html.Div([
-                    dbc.Input(id="pnp-res-task-search-input", placeholder="输入任务ID搜索批次...", type="text", style={"marginBottom": "10px"}),
+                    dcc.Dropdown(
+                        id="pnp-res-task-filter",
+                        options=[],
+                        placeholder="搜索并选择 task_id...",
+                        clearable=True,
+                        searchable=True,
+                        style={"marginBottom": "10px"},
+                    ),
                     dbc.Button("刷新/查询", id="pnp-res-batch-refresh-btn", color="primary", size="sm", className="w-100"),
                 ], style={"marginBottom": "15px"}),
 

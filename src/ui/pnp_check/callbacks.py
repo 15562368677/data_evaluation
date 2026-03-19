@@ -24,6 +24,95 @@ PNP_STATUS_COLOR = {
     "invalid": "#6b7280",
 }
 
+OUTLIER_ORDER = ["none", "low", "normal", "high"]
+OUTLIER_LABEL = {
+    "none": "无PnP",
+    "low": "低离群",
+    "normal": "正常",
+    "high": "高离群",
+}
+
+
+def _normalize_segments(raw_val):
+    if not raw_val:
+        return []
+    parsed = raw_val
+    if isinstance(raw_val, str):
+        try:
+            parsed = json.loads(raw_val)
+        except Exception:
+            return []
+    if not isinstance(parsed, list):
+        return []
+
+    segments = []
+    for seg in parsed:
+        if not isinstance(seg, (list, tuple)) or len(seg) < 2:
+            continue
+        try:
+            st = float(seg[0])
+            ed = float(seg[1])
+        except Exception:
+            continue
+        if ed < st:
+            st, ed = ed, st
+        segments.append([st, ed])
+    return segments
+
+
+def _calc_total_duration(segments):
+    return sum(max(0.0, float(ed) - float(st)) for st, ed in segments)
+
+
+def _calc_last_end(segments):
+    if not segments:
+        return 0.0
+    return max(float(seg[1]) for seg in segments)
+
+
+def _calc_iqr_bounds(values):
+    arr = [float(v) for v in values if v is not None and float(v) > 0]
+    if len(arr) < 4:
+        return None, None
+    s = pd.Series(arr)
+    q1 = float(s.quantile(0.25))
+    q3 = float(s.quantile(0.75))
+    iqr = q3 - q1
+    if iqr <= 0:
+        return None, None
+    return q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+
+def _classify_outlier(value, low, high):
+    if value is None or value <= 0:
+        return "none"
+    if low is None or high is None:
+        return "normal"
+    if value < low:
+        return "low"
+    if value > high:
+        return "high"
+    return "normal"
+
+
+def _calc_sigma_bounds(values, sigma_k=3.0):
+    arr = [float(v) for v in values if v is not None and float(v) > 0]
+    if len(arr) < 2:
+        return None, None
+    s = pd.Series(arr)
+    mean_v = float(s.mean())
+    std_v = float(s.std(ddof=0))
+    if std_v <= 0:
+        return None, None
+    low = mean_v - sigma_k * std_v
+    high = mean_v + sigma_k * std_v
+    # 比例轴映射到 [0,1]
+    low = max(0.0, low)
+    high = min(1.0, high)
+    if high <= low:
+        return None, None
+    return low, high
+
 
 def _pnp_sort_key(value):
     sval = str(value)
@@ -32,7 +121,7 @@ def _pnp_sort_key(value):
     return 1, sval
 
 
-def _build_checked_card(row: dict, label: str):
+def _build_checked_card(row: dict, label: str, selected_episode: str = ""):
     """构建已检测数据的只读卡片。"""
     ep_id = str(row.get("episode_id", ""))
     task_id = str(row.get("task_id", ""))
@@ -41,6 +130,8 @@ def _build_checked_card(row: dict, label: str):
 
     label_text = PNP_STATUS_LABEL.get(label, label)
     label_color = PNP_STATUS_COLOR.get(label, "#6b7280")
+
+    is_selected = str(ep_id) == str(selected_episode or "")
 
     return html.Div(
         [
@@ -87,17 +178,17 @@ def _build_checked_card(row: dict, label: str):
             )
         ],
         style={
-            "border": f"1px solid {label_color}30",
+            "border": "1px solid #3b82f6" if is_selected else f"1px solid {label_color}30",
             "borderLeft": f"4px solid {label_color}",
             "borderRadius": "8px",
             "padding": "10px 12px",
-            "background": f"{label_color}08",
+            "background": "#e0f2fe" if is_selected else f"{label_color}08",
             "marginBottom": "8px",
         },
     )
 
 
-def _build_pnp_card(row: dict, status_map: dict):
+def _build_pnp_card(row: dict, status_map: dict, selected_episode: str = ""):
     """构建单条数据的卡片（用于左侧表格区域）。"""
     ep_id = str(row.get("episode_id", ""))
     task_id = str(row.get("task_id", ""))
@@ -123,6 +214,8 @@ def _build_pnp_card(row: dict, status_map: dict):
                 "marginLeft": "6px",
             },
         )
+
+    is_selected = str(ep_id) == str(selected_episode or "")
 
     return html.Div(
         [
@@ -165,10 +258,10 @@ def _build_pnp_card(row: dict, status_map: dict):
             )
         ],
         style={
-            "border": "1px solid #e5e7eb",
+            "border": "1px solid #3b82f6" if is_selected else "1px solid #e5e7eb",
             "borderRadius": "8px",
             "padding": "10px 12px",
-            "background": "#fff",
+            "background": "#e0f2fe" if is_selected else "#fff",
             "marginBottom": "8px",
         },
     )
@@ -241,27 +334,35 @@ def _build_sidebar_row(item: dict, group_status: str):
 
 def register_callbacks(app):
 
-    # 1. 加载所有 PnP Batches
+    # 1. 加载所有 PnP task_id
     @app.callback(
         Output("pnp-check-batch-dropdown", "options"),
         Input("pnp-check-batch-dropdown", "search_value"),
     )
-    def load_pnp_batches(search_value):
+    def load_pnp_tasks(search_value):
         try:
-            sql = "SELECT uniq_id, task_id, created_at FROM pnp_batches ORDER BY created_at DESC"
-            df = query_pnp_df(sql)
+            sql = """
+                SELECT DISTINCT task_id
+                FROM pnp_batches
+                WHERE task_id IS NOT NULL
+                ORDER BY task_id DESC
+            """
+            params = None
+            if search_value:
+                sql = """
+                    SELECT DISTINCT task_id
+                    FROM pnp_batches
+                    WHERE task_id IS NOT NULL
+                      AND CAST(task_id AS TEXT) ILIKE %(search)s
+                    ORDER BY task_id DESC
+                """
+                params = {"search": f"%{search_value}%"}
+            df = query_pnp_df(sql, params)
             if df.empty:
                 return []
-            opts = []
-            for _, row in df.iterrows():
-                b_id = str(row['uniq_id'])
-                t_id = str(row['task_id'])
-                cd = row['created_at'].strftime("%Y-%m-%d %H:%M") if pd.notnull(row['created_at']) else ""
-                label = f"{b_id} (Task: {t_id}) [{cd}]"
-                opts.append({"label": label, "value": b_id})
-            return opts
+            return [{"label": str(t), "value": str(t)} for t in df["task_id"] if pd.notnull(t)]
         except Exception as e:
-            logging.error(f"Failed to load pnp batches: {e}")
+            logging.error(f"Failed to load pnp tasks: {e}")
             return []
 
     # 2. 点击“加载”按钮，获取当前批次的信息，解析 PnP 此数，动态设置 Slider Maximum，并重置 page 和 visible ids 等
@@ -276,6 +377,19 @@ def register_callbacks(app):
             Output("pnp-check-left-filter", "options"),
             Output("pnp-check-left-filter", "value"),
             Output("pnp-check-left-chart", "figure"),
+            Output("pnp-check-right-duration-filter", "options"),
+            Output("pnp-check-right-duration-filter", "value"),
+            Output("pnp-check-right-duration-chart", "figure"),
+            Output("pnp-check-left-duration-filter", "options"),
+            Output("pnp-check-left-duration-filter", "value"),
+            Output("pnp-check-left-duration-chart", "figure"),
+            Output("pnp-check-right-axis-filter", "options"),
+            Output("pnp-check-right-axis-filter", "value"),
+            Output("pnp-check-right-axis-chart", "figure"),
+            Output("pnp-check-left-axis-filter", "options"),
+            Output("pnp-check-left-axis-filter", "value"),
+            Output("pnp-check-left-axis-chart", "figure"),
+            Output("pnp-check-applied-filters", "data"),
         ],
         Input("pnp-check-load-batch-btn", "n_clicks"),
         State("pnp-check-batch-dropdown", "value")
@@ -284,39 +398,130 @@ def register_callbacks(app):
         import plotly.graph_objects as go
         empty_fig = go.Figure()
         empty_fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=140, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+        empty_small_fig = go.Figure()
+        empty_small_fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=120, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
 
-        if not n_clicks or not batch_id:
-            return no_update, "请选择一个 BATCH_ID", no_update, no_update, no_update, no_update, no_update, no_update, no_update
+        selected_task_id = str(batch_id) if batch_id is not None else None
 
-        # fetch data 
+        if not n_clicks or not selected_task_id:
+            return (
+                no_update,
+                "请选择一个 TASK_ID",
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+                no_update,
+            )
+
+        # fetch data for selected task_id (latest result per episode)
         sql = """
-            SELECT s.episode_id, s.right_pnp_result, s.left_pnp_result, b.task_id 
+            SELECT DISTINCT ON (s.episode_id)
+                   s.episode_id, s.right_pnp_result, s.left_pnp_result, b.task_id
             FROM pnp_streams s
             JOIN pnp_batches b ON s.batch_id = b.uniq_id
-            WHERE s.batch_id = %s
+            WHERE CAST(b.task_id AS TEXT) = %s
+            ORDER BY s.episode_id, s.checked_at DESC
         """
         try:
-            df = query_pnp_df(sql, (batch_id,))
+            df = query_pnp_df(sql, (selected_task_id,))
         except Exception as e:
-            return [], f"查询异常: {e}", {}, [], [], empty_fig, [], [], empty_fig
+            return [], f"查询异常: {e}", {}, [], [], empty_fig, [], [], empty_fig, [], [], empty_small_fig, [], [], empty_small_fig, [], [], empty_small_fig, [], [], empty_small_fig, {"r_count": [], "l_count": [], "r_duration": [], "l_duration": [], "r_axis": [], "l_axis": []}
         
         if df.empty:
-            return [], "该批次下无 Episode 数据", {}, [], [], empty_fig, [], [], empty_fig
+            return [], "该任务下无 Episode 数据", {}, [], [], empty_fig, [], [], empty_fig, [], [], empty_small_fig, [], [], empty_small_fig, [], [], empty_small_fig, [], [], empty_small_fig, {"r_count": [], "l_count": [], "r_duration": [], "l_duration": [], "r_axis": [], "l_axis": []}
+
+        episode_duration_map = {}
+        episode_ids = tuple(str(x) for x in df["episode_id"].tolist())
+        if episode_ids:
+            try:
+                meta_df = query_df(
+                    "SELECT id, trajectory_duration, trajectory_start, trajectory_end FROM episodes WHERE id IN %s",
+                    (episode_ids,),
+                )
+                for _, mrow in meta_df.iterrows():
+                    ep_id = str(mrow.get("id"))
+                    total_sec = None
+                    td = mrow.get("trajectory_duration")
+                    try:
+                        if td is not None:
+                            td_float = float(td)
+                            if td_float > 0:
+                                total_sec = td_float
+                    except Exception:
+                        total_sec = None
+                    if (total_sec is None or total_sec <= 0) and pd.notnull(mrow.get("trajectory_start")) and pd.notnull(mrow.get("trajectory_end")):
+                        try:
+                            total_sec = float((mrow["trajectory_end"] - mrow["trajectory_start"]).total_seconds())
+                        except Exception:
+                            total_sec = None
+                    if total_sec is not None and total_sec > 0:
+                        episode_duration_map[ep_id] = total_sec
+            except Exception:
+                episode_duration_map = {}
 
         parsed_data = []
         max_r, max_l = 0, 0
         r_counts = {}
         l_counts = {}
+        r_axis_points = []
+        l_axis_points = []
         for _, row in df.iterrows():
             ep_id = str(row["episode_id"])
-            task_id = str(row["task_id"])
+            row_task_id = str(row["task_id"])
             
             r_val = row['right_pnp_result']
             l_val = row['left_pnp_result']
-            r_res = r_val if isinstance(r_val, list) else (json.loads(r_val) if r_val else [])
-            l_res = l_val if isinstance(l_val, list) else (json.loads(l_val) if l_val else [])
+            r_res = _normalize_segments(r_val)
+            l_res = _normalize_segments(l_val)
             r_count = len(r_res)
             l_count = len(l_res)
+            r_duration_abs = _calc_total_duration(r_res)
+            l_duration_abs = _calc_total_duration(l_res)
+            max_end = max(_calc_last_end(r_res), _calc_last_end(l_res))
+            total_sec = episode_duration_map.get(ep_id)
+            if total_sec is None or total_sec <= 0:
+                total_sec = max_end if max_end > 0 else None
+
+            if total_sec and total_sec > 0:
+                r_duration = r_duration_abs / float(total_sec)
+                l_duration = l_duration_abs / float(total_sec)
+            else:
+                r_duration = 0.0
+                l_duration = 0.0
+
+            def _axis_ratios(segments, duration_sec):
+                if not duration_sec or duration_sec <= 0:
+                    return []
+                ratios = []
+                for st, ed in segments:
+                    center = (float(st) + float(ed)) / 2.0
+                    ratio = center / float(duration_sec)
+                    ratio = max(0.0, min(1.0, ratio))
+                    ratios.append(ratio)
+                return ratios
+
+            r_ratios = _axis_ratios(r_res, total_sec)
+            l_ratios = _axis_ratios(l_res, total_sec)
+            r_axis_score = sum(r_ratios) / len(r_ratios) if r_ratios else 0.0
+            l_axis_score = sum(l_ratios) / len(l_ratios) if l_ratios else 0.0
+            r_axis_points.extend(r_ratios)
+            l_axis_points.extend(l_ratios)
             
             if r_count > max_r: max_r = r_count
             if l_count > max_l: max_l = l_count
@@ -326,16 +531,52 @@ def register_callbacks(app):
             
             parsed_data.append({
                 "episode_id": ep_id,
-                "task_id": task_id,
+                "task_id": row_task_id,
                 "r_count": r_count,
                 "l_count": l_count,
+                "r_duration": r_duration,
+                "l_duration": l_duration,
+                "r_axis_score": r_axis_score,
+                "l_axis_score": l_axis_score,
                 "right_pnp_result": r_res,
                 "left_pnp_result": l_res,
-                "batch_id": batch_id
+                "task_filter_id": selected_task_id
             })
+
+        r_duration_low, r_duration_high = _calc_iqr_bounds([x["r_duration"] for x in parsed_data])
+        l_duration_low, l_duration_high = _calc_iqr_bounds([x["l_duration"] for x in parsed_data])
+        r_axis_low, r_axis_high = _calc_sigma_bounds(r_axis_points, sigma_k=3.0)
+        l_axis_low, l_axis_high = _calc_sigma_bounds(l_axis_points, sigma_k=3.0)
+
+        r_duration_counts = {k: 0 for k in OUTLIER_ORDER}
+        l_duration_counts = {k: 0 for k in OUTLIER_ORDER}
+        r_axis_counts = {k: 0 for k in OUTLIER_ORDER}
+        l_axis_counts = {k: 0 for k in OUTLIER_ORDER}
+
+        for item in parsed_data:
+            r_d_tag = _classify_outlier(item["r_duration"], r_duration_low, r_duration_high)
+            l_d_tag = _classify_outlier(item["l_duration"], l_duration_low, l_duration_high)
+            r_a_tag = _classify_outlier(item["r_axis_score"], r_axis_low, r_axis_high)
+            l_a_tag = _classify_outlier(item["l_axis_score"], l_axis_low, l_axis_high)
+            item["r_duration_tag"] = r_d_tag
+            item["l_duration_tag"] = l_d_tag
+            item["r_axis_tag"] = r_a_tag
+            item["l_axis_tag"] = l_a_tag
+            r_duration_counts[r_d_tag] += 1
+            l_duration_counts[l_d_tag] += 1
+            r_axis_counts[r_a_tag] += 1
+            l_axis_counts[l_a_tag] += 1
 
         def _make_opts(c_dict):
             return [{"label": f"{k}次 ({c_dict[k]}个)", "value": k} for k in sorted(c_dict.keys())]
+
+        def _make_outlier_opts(c_dict):
+            opts = []
+            for key in OUTLIER_ORDER:
+                count = int(c_dict.get(key, 0))
+                if count > 0:
+                    opts.append({"label": f"{OUTLIER_LABEL[key]} ({count}个)", "value": key})
+            return opts
             
         def _make_fig(c_dict, title, color):
             x_vals = sorted(c_dict.keys())
@@ -358,31 +599,120 @@ def register_callbacks(app):
             )
             return fig
 
+        def _make_outlier_fig(c_dict, title, color):
+            x_vals = [k for k in OUTLIER_ORDER if int(c_dict.get(k, 0)) > 0]
+            y_vals = [int(c_dict.get(k, 0)) for k in x_vals]
+            labels = [OUTLIER_LABEL[k] for k in x_vals]
+            if not x_vals:
+                return empty_small_fig
+            fig = go.Figure(data=[go.Bar(
+                x=labels,
+                y=y_vals,
+                marker_color=color,
+                text=y_vals,
+                textposition='auto',
+                hovertemplate=f"{title}: %{{x}}<br>数量: %{{y}}个<extra></extra>"
+            )])
+            fig.update_layout(
+                margin=dict(l=20, r=20, t=10, b=20),
+                xaxis=dict(type='category', title=""),
+                yaxis=dict(visible=False),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                height=120
+            )
+            return fig
+
         r_opts = _make_opts(r_counts)
         l_opts = _make_opts(l_counts)
+        r_duration_opts = _make_outlier_opts(r_duration_counts)
+        l_duration_opts = _make_outlier_opts(l_duration_counts)
+        r_axis_opts = _make_outlier_opts(r_axis_counts)
+        l_axis_opts = _make_outlier_opts(l_axis_counts)
 
         r_fig = _make_fig(r_counts, "右手", "#3b82f6") if r_counts else empty_fig
         l_fig = _make_fig(l_counts, "左手", "#10b981") if l_counts else empty_fig
+        r_duration_fig = _make_outlier_fig(r_duration_counts, "右手时长离群", "#2563eb")
+        l_duration_fig = _make_outlier_fig(l_duration_counts, "左手时长离群", "#059669")
+        r_axis_fig = _make_outlier_fig(r_axis_counts, "右手时间轴离群", "#4f46e5")
+        l_axis_fig = _make_outlier_fig(l_axis_counts, "左手时间轴离群", "#0d9488")
 
         task_info = "未知"
-        if parsed_data:
-            t_id = parsed_data[0]["task_id"]
-            try:
-                # Need to use query_df from source_db which is already imported
-                task_df = query_df("SELECT descriptions FROM tasks WHERE id = %(id)s", {"id": t_id})
-                if not task_df.empty:
-                    desc_val = task_df.iloc[0]["descriptions"]
-                    if isinstance(desc_val, str):
-                        desc_val = json.loads(desc_val)
-                    if isinstance(desc_val, dict):
-                        task_info = desc_val.get("zh", str(desc_val))
-                    else:
-                        task_info = str(desc_val)
-            except Exception as e:
-                task_info = f"获取失败: {e}"
+        try:
+            task_df = query_df("SELECT descriptions FROM tasks WHERE id = %(id)s", {"id": selected_task_id})
+            if not task_df.empty:
+                desc_val = task_df.iloc[0]["descriptions"]
+                if isinstance(desc_val, str):
+                    desc_val = json.loads(desc_val)
+                if isinstance(desc_val, dict):
+                    task_info = desc_val.get("zh", str(desc_val))
+                else:
+                    task_info = str(desc_val)
+        except Exception as e:
+            task_info = f"获取失败: {e}"
+
+        # 统计：已执行PnP质检数量（含失败）和总数量
+        success_count = len({str(x) for x in df["episode_id"].tolist()})
+        failed_count = 0
+        total_count = 0
+        executed_including_failed = 0
+        try:
+            failed_df = query_pnp_df(
+                """
+                SELECT COUNT(DISTINCT f.episode_id) AS failed_count
+                FROM pnp_failures f
+                JOIN pnp_batches b ON f.batch_id = b.uniq_id
+                WHERE CAST(b.task_id AS TEXT) = %s
+                """,
+                (selected_task_id,),
+            )
+            if not failed_df.empty:
+                failed_count = int(failed_df.iloc[0].get("failed_count") or 0)
+        except Exception:
+            failed_count = 0
+
+        try:
+            executed_df = query_pnp_df(
+                """
+                SELECT COUNT(DISTINCT episode_id) AS executed_count
+                FROM (
+                    SELECT s.episode_id
+                    FROM pnp_streams s
+                    JOIN pnp_batches b ON s.batch_id = b.uniq_id
+                    WHERE CAST(b.task_id AS TEXT) = %s
+                    UNION
+                    SELECT f.episode_id
+                    FROM pnp_failures f
+                    JOIN pnp_batches b2 ON f.batch_id = b2.uniq_id
+                    WHERE CAST(b2.task_id AS TEXT) = %s
+                ) t
+                """,
+                (selected_task_id, selected_task_id),
+            )
+            if not executed_df.empty:
+                executed_including_failed = int(executed_df.iloc[0].get("executed_count") or 0)
+        except Exception:
+            executed_including_failed = success_count + failed_count
+
+        try:
+            total_df = query_df(
+                """
+                SELECT COUNT(*) AS total_count
+                FROM episodes
+                WHERE task_id = %(task_id)s
+                  AND trajectory_duration IS NOT NULL
+                  AND trajectory_duration > 0
+                """,
+                {"task_id": selected_task_id},
+            )
+            if not total_df.empty:
+                total_count = int(total_df.iloc[0].get("total_count") or 0)
+        except Exception:
+            total_count = 0
 
         msg_element = html.Div([
-            html.Div(f"共加载 {len(parsed_data)} 条 Episode 数据。当前批次最高 右手PnP次数: {max_r}, 左手PnP次数: {max_l}。"),
+            html.Div(f"共加载 {len(parsed_data)} 条 Episode 数据。当前任务最高 右手PnP次数: {max_r}, 左手PnP次数: {max_l}。"),
+            html.Div(f"已执行PnP质检（含失败）：{executed_including_failed}/{total_count}（成功: {success_count}, 失败: {failed_count}）", style={"marginTop": "2px"}),
             html.Div(f"任务内容：{task_info}", style={"marginTop": "5px"})
         ])
 
@@ -392,7 +722,51 @@ def register_callbacks(app):
             {"right_max": max_r, "left_max": max_l},
             r_opts, [], r_fig,
             l_opts, [], l_fig,
+            r_duration_opts, [], r_duration_fig,
+            l_duration_opts, [], l_duration_fig,
+            r_axis_opts, [], r_axis_fig,
+            l_axis_opts, [], l_axis_fig,
+            {"r_count": [], "l_count": [], "r_duration": [], "l_duration": [], "r_axis": [], "l_axis": []},
         )
+
+    @app.callback(
+        [
+            Output("pnp-check-filter-modal", "is_open"),
+            Output("pnp-check-applied-filters", "data", allow_duplicate=True),
+        ],
+        [
+            Input("pnp-check-open-filter-modal-btn", "n_clicks"),
+            Input("pnp-check-filter-modal-cancel-btn", "n_clicks"),
+            Input("pnp-check-filter-modal-confirm-btn", "n_clicks"),
+        ],
+        [
+            State("pnp-check-filter-modal", "is_open"),
+            State("pnp-check-right-filter", "value"),
+            State("pnp-check-left-filter", "value"),
+            State("pnp-check-right-duration-filter", "value"),
+            State("pnp-check-left-duration-filter", "value"),
+            State("pnp-check-right-axis-filter", "value"),
+            State("pnp-check-left-axis-filter", "value"),
+        ],
+        prevent_initial_call=True,
+    )
+    def toggle_filter_modal(open_clicks, cancel_clicks, confirm_clicks, is_open, r_vis, l_vis, r_d_vis, l_d_vis, r_a_vis, l_a_vis):
+        trigger = ctx.triggered_id
+        if trigger == "pnp-check-open-filter-modal-btn":
+            return True, no_update
+        if trigger == "pnp-check-filter-modal-cancel-btn":
+            return False, no_update
+        if trigger == "pnp-check-filter-modal-confirm-btn":
+            applied = {
+                "r_count": r_vis or [],
+                "l_count": l_vis or [],
+                "r_duration": r_d_vis or [],
+                "l_duration": l_d_vis or [],
+                "r_axis": r_a_vis or [],
+                "l_axis": l_a_vis or [],
+            }
+            return False, applied
+        return is_open, no_update
 
     # 3. 核心表格渲染与分页
     @app.callback(
@@ -406,25 +780,37 @@ def register_callbacks(app):
         ],
         [
             Input("pnp-check-query-data", "data"),
-            Input("pnp-check-right-filter", "value"),
-            Input("pnp-check-left-filter", "value"),
+            Input("pnp-check-applied-filters", "data"),
             Input("pnp-check-submitted", "data"),
             Input("pnp-check-show-checked", "data"),
             Input("pnp-check-load-more-btn", "n_clicks"),
+            Input("pnp-check-selected-video", "data"),
         ],
         [
             State("pnp-check-row-status", "data"),
             State("pnp-check-page", "data"),
         ],
     )
-    def update_table(all_data, r_vis, l_vis, submitted, show_checked, load_more, row_status, page):
+    def update_table(all_data, applied_filters, submitted, show_checked, load_more, selected_episode, row_status, page):
         submitted = submitted or {"pass": [], "multi_pick": [], "fail_pick": [], "invalid": []}
         show_checked = bool(show_checked)
+        applied_filters = applied_filters or {}
+        r_vis = applied_filters.get("r_count", []) or []
+        l_vis = applied_filters.get("l_count", []) or []
+        r_d_vis = applied_filters.get("r_duration", []) or []
+        l_d_vis = applied_filters.get("l_duration", []) or []
+        r_a_vis = applied_filters.get("r_axis", []) or []
+        l_a_vis = applied_filters.get("l_axis", []) or []
 
         trigger = ctx.triggered_id
         if trigger == "pnp-check-load-more-btn":
             page = (page or 1) + 1
-        elif trigger in ["pnp-check-query-data", "pnp-check-right-filter", "pnp-check-left-filter", "pnp-check-show-checked", "pnp-check-submitted"]:
+        elif trigger in [
+            "pnp-check-query-data",
+            "pnp-check-applied-filters",
+            "pnp-check-show-checked",
+            "pnp-check-submitted",
+        ]:
             page = 1
         else:
             page = page or 1
@@ -455,18 +841,31 @@ def register_callbacks(app):
         # Filter limits
         r_vis_set = set(r_vis) if r_vis else None
         l_vis_set = set(l_vis) if l_vis else None
+        r_d_vis_set = set(r_d_vis) if r_d_vis else None
+        l_d_vis_set = set(l_d_vis) if l_d_vis else None
+        r_a_vis_set = set(r_a_vis) if r_a_vis else None
+        l_a_vis_set = set(l_a_vis) if l_a_vis else None
+
+        def _row_match_filters(row):
+            rc = int(row.get("r_count", 0))
+            lc = int(row.get("l_count", 0))
+            r_d_tag = str(row.get("r_duration_tag", "none"))
+            l_d_tag = str(row.get("l_duration_tag", "none"))
+            r_a_tag = str(row.get("r_axis_tag", "none"))
+            l_a_tag = str(row.get("l_axis_tag", "none"))
+            r_ok = (r_vis_set is None) or (rc in r_vis_set)
+            l_ok = (l_vis_set is None) or (lc in l_vis_set)
+            r_d_ok = (r_d_vis_set is None) or (r_d_tag in r_d_vis_set)
+            l_d_ok = (l_d_vis_set is None) or (l_d_tag in l_d_vis_set)
+            r_a_ok = (r_a_vis_set is None) or (r_a_tag in r_a_vis_set)
+            l_a_ok = (l_a_vis_set is None) or (l_a_tag in l_a_vis_set)
+            return r_ok and l_ok and r_d_ok and l_d_ok and r_a_ok and l_a_ok
 
         if not show_checked:
             # Show unchecked & unsubmitted
             visible_rows = []
             for r in all_data:
-                rc = int(r.get("r_count", 0))
-                lc = int(r.get("l_count", 0))
-                
-                r_ok = (r_vis_set is None) or (rc in r_vis_set)
-                l_ok = (l_vis_set is None) or (lc in l_vis_set)
-                
-                if r_ok and l_ok:
+                if _row_match_filters(r):
                     ep_id = str(r.get("episode_id"))
                     if ep_id not in submitted_ids and ep_id not in checked_map:
                         visible_rows.append(r)
@@ -480,19 +879,28 @@ def register_callbacks(app):
                 )
             else:
                 shown = visible_rows[:MAX_RENDER]
-                cards = [_build_pnp_card(r, row_status or {}) for r in shown]
+                cards = [_build_pnp_card(r, row_status or {}, selected_episode) for r in shown]
                 if len(visible_rows) > MAX_RENDER:
                     cards.append(html.Div("往下滚动加载更多...", style={"textAlign": "center", "color": "#6b7280", "padding": "10px", "fontSize": "12px", "marginTop": "10px"}))
                 table_ui = html.Div(cards)
 
             sel_r_str = ",".join(map(str, sorted(r_vis_set))) if r_vis_set else "全部"
             sel_l_str = ",".join(map(str, sorted(l_vis_set))) if l_vis_set else "全部"
-            summary = f"当前范围内包含 {len(visible_rows)} 条未检测数据（右: {sel_r_str}, 左: {sel_l_str}）。"
+            sel_r_d = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(r_d_vis_set)) if r_d_vis_set else "全部"
+            sel_l_d = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(l_d_vis_set)) if l_d_vis_set else "全部"
+            sel_r_a = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(r_a_vis_set)) if r_a_vis_set else "全部"
+            sel_l_a = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(l_a_vis_set)) if l_a_vis_set else "全部"
+            summary = (
+                f"当前范围内包含 {len(visible_rows)} 条未检测数据"
+                f"（次数: 右{sel_r_str}/左{sel_l_str}；"
+                f"时长离群: 右{sel_r_d}/左{sel_l_d}；"
+                f"时间轴离群: 右{sel_r_a}/左{sel_l_a}）。"
+            )
             return table_ui, visible_ids, summary, btn_label, True, page
 
         else:
             # Show checked records
-            checked_rows = [r for r in all_data if str(r.get("episode_id")) in checked_map]
+            checked_rows = [r for r in all_data if str(r.get("episode_id")) in checked_map and _row_match_filters(r)]
             
             if not checked_rows:
                 table_ui = html.Div(
@@ -501,15 +909,28 @@ def register_callbacks(app):
                 )
             else:
                 shown = checked_rows[:MAX_RENDER]
-                cards = [_build_checked_card(r, checked_map.get(str(r.get("episode_id")), "pass")) for r in shown]
+                cards = [_build_checked_card(r, checked_map.get(str(r.get("episode_id")), "pass"), selected_episode) for r in shown]
                 if len(checked_rows) > MAX_RENDER:
                     cards.append(html.Div("往下滚动加载更多...", style={"textAlign": "center", "color": "#6b7280", "padding": "10px", "fontSize": "12px", "marginTop": "10px"}))
                 table_ui = html.Div(cards)
 
-            summary = f"当前批次中包含 {len(checked_rows)} 条已检测数据。"
+            summary = f"当前任务中包含 {len(checked_rows)} 条已检测数据。"
             return table_ui, [], summary, btn_label, False, page
 
     # 4. 点击卡片上的按钮播放对应视频及渲染 PnP 时间轴
+    @app.callback(
+        Output("pnp-check-selected-video", "data", allow_duplicate=True),
+        [
+            Input("pnp-check-query-data", "data"),
+            Input("pnp-check-applied-filters", "data"),
+            Input("pnp-check-show-checked", "data"),
+        ],
+        prevent_initial_call=True,
+    )
+    def reset_selected_video_on_dataset_change(_all_data, _filters, _show_checked):
+        # 数据集或筛选条件变化时，清空已选视频，避免视频/时间轴与当前卡片列表错位
+        return None
+
     @app.callback(
         Output("pnp-check-selected-video", "data"),
         Input({"type": "pnp-check-open-video-btn", "episode_id": ALL}, "n_clicks"),
@@ -523,15 +944,14 @@ def register_callbacks(app):
         trigger_val = ctx.triggered[0].get("value")
         if not trigger_val:
             return no_update
-            
-        trigger_id_str = ctx.triggered[0]["prop_id"].split(".")[0]
-        try:
-            trigger_dict = json.loads(trigger_id_str)
-            episode_id = trigger_dict.get("episode_id")
-            if not episode_id: return no_update
-            return episode_id
-        except Exception:
+
+        trigger_id = ctx.triggered_id
+        if not isinstance(trigger_id, dict):
             return no_update
+        episode_id = trigger_id.get("episode_id")
+        if not episode_id:
+            return no_update
+        return episode_id
 
     @app.callback(
         [
@@ -544,7 +964,35 @@ def register_callbacks(app):
     )
     def render_video_and_timeline(episode_id, all_data):
         if not episode_id:
-            return no_update, no_update
+            return (
+                html.Div(
+                    "点击下方数据卡片播放对应视频",
+                    style={
+                        "height": "360px",
+                        "display": "flex",
+                        "alignItems": "center",
+                        "justifyContent": "center",
+                        "backgroundColor": "#000",
+                        "color": "#9ca3af",
+                        "fontSize": "16px",
+                        "borderRadius": "8px",
+                    },
+                ),
+                html.Div(
+                    "暂无时间轴数据",
+                    style={
+                        "height": "56px",
+                        "display": "flex",
+                        "alignItems": "center",
+                        "justifyContent": "center",
+                        "backgroundColor": "#f9fafb",
+                        "color": "#9ca3af",
+                        "fontSize": "14px",
+                        "border": "1px dashed #e5e7eb",
+                        "borderRadius": "6px",
+                    },
+                ),
+            )
             
         sql = """
             SELECT s.file_path
@@ -987,4 +1435,3 @@ def register_callbacks(app):
     def toggle_show_checked(n_clicks, current_state):
         if not n_clicks: return no_update
         return not current_state
-

@@ -5,6 +5,7 @@ from dash import Input, Output, State, ctx, dcc, html, no_update
 from plotly.subplots import make_subplots
 
 from src.utils.source_db import query_df
+from src.utils.result_db import query_pnp_df
 from src.utils.data_parser import (
     JOINT_NAMES,
     HAND_JOINT_NAMES,
@@ -23,13 +24,14 @@ def register_callbacks(app):
         prevent_initial_call=False,
     )
     def load_task_options(search_value):
-        """加载任务列表（无 valid/machine_id 限制）。"""
+        """加载任务列表（仅 valid=true）。"""
         try:
             if search_value:
                 sql = """
                     SELECT DISTINCT task_id
                     FROM episodes
-                    WHERE CAST(task_id AS TEXT) LIKE %(search)s
+                    WHERE valid = true
+                      AND CAST(task_id AS TEXT) LIKE %(search)s
                     ORDER BY task_id
                     LIMIT 100
                 """
@@ -38,6 +40,7 @@ def register_callbacks(app):
                 sql = """
                     SELECT DISTINCT task_id
                     FROM episodes
+                    WHERE valid = true
                     ORDER BY task_id
                     LIMIT 100
                 """
@@ -60,7 +63,8 @@ def register_callbacks(app):
                 sql = """
                     SELECT DISTINCT task_id
                     FROM episodes
-                    WHERE CAST(task_id AS TEXT) LIKE %(search)s
+                    WHERE valid = true
+                      AND CAST(task_id AS TEXT) LIKE %(search)s
                     ORDER BY task_id
                     LIMIT 100
                 """
@@ -69,6 +73,7 @@ def register_callbacks(app):
                 sql = """
                     SELECT DISTINCT task_id
                     FROM episodes
+                    WHERE valid = true
                     ORDER BY task_id
                     LIMIT 100
                 """
@@ -104,9 +109,9 @@ def register_callbacks(app):
         ],
     )
     def load_episode_options(task_id, search_value):
-        """加载记录 ID 列表（无 valid/machine_id 限制，支持全局搜索）。"""
+        """加载记录 ID 列表（仅 valid=true，支持全局搜索）。"""
         try:
-            conditions = []
+            conditions = ["valid = true"]
             params = {}
 
             if task_id:
@@ -165,9 +170,10 @@ def register_callbacks(app):
         ],
         Input("pnp-load-btn", "n_clicks"),
         State("pnp-episode-search", "value"),
+        State("pnp-task-search", "value"),
         prevent_initial_call=True,
     )
-    def load_episode_data(n_clicks, episode_id):
+    def load_episode_data(n_clicks, episode_id, selected_task_id):
         """加载选中记录的关节数据。并将路径发送给视频加载回调。"""
         if not n_clicks or not episode_id:
             return no_update, no_update, html.Div(
@@ -182,6 +188,13 @@ def register_callbacks(app):
                 FROM streams s
                 WHERE s.episode_id = %(episode_id)s
                   AND s.stream_name = 'rgb'
+                ORDER BY
+                  CASE
+                    WHEN POSITION('camera_top.parquet' IN s.file_path) > 0 THEN 0
+                    WHEN POSITION('depth' IN s.file_path) > 0 THEN 2
+                    ELSE 1
+                  END,
+                  s.file_path
                 LIMIT 1
             """
             df = query_df(sql, {"episode_id": episode_id})
@@ -199,6 +212,59 @@ def register_callbacks(app):
             )
 
         status_parts = []
+
+        task_id_for_stats = str(selected_task_id) if selected_task_id else None
+        if not task_id_for_stats:
+            try:
+                task_df = query_df(
+                    "SELECT task_id FROM episodes WHERE id = %(episode_id)s LIMIT 1",
+                    {"episode_id": episode_id},
+                )
+                if not task_df.empty:
+                    task_id_for_stats = str(task_df.iloc[0]["task_id"])
+            except Exception:
+                task_id_for_stats = None
+
+        if task_id_for_stats:
+            try:
+                total_df = query_df(
+                    """
+                    SELECT COUNT(*) AS total_count
+                    FROM episodes
+                    WHERE task_id = %(task_id)s
+                      AND valid = true
+                    """,
+                    {"task_id": task_id_for_stats},
+                )
+                total_count = int(total_df.iloc[0]["total_count"]) if not total_df.empty else 0
+
+                invalid_df = query_pnp_df(
+                    """
+                    SELECT COUNT(DISTINCT episode_id) AS invalid_count
+                    FROM duration_results
+                    WHERE task_id = %(task_id)s
+                      AND duration_result = 'invalid'
+                    """,
+                    {"task_id": task_id_for_stats},
+                )
+                invalid_count = int(invalid_df.iloc[0]["invalid_count"]) if not invalid_df.empty else 0
+
+                checked_df = query_pnp_df(
+                    """
+                    SELECT COUNT(DISTINCT ps.episode_id) AS pnp_checked_count
+                    FROM pnp_streams ps
+                    JOIN pnp_batches pb ON ps.batch_id = pb.uniq_id
+                    WHERE pb.task_id = %(task_id)s
+                    """,
+                    {"task_id": task_id_for_stats},
+                )
+                pnp_checked_count = int(checked_df.iloc[0]["pnp_checked_count"]) if not checked_df.empty else 0
+
+                status_parts.append(
+                    f"任务 {task_id_for_stats}：共 {total_count} 条，无效 {invalid_count} 条，已执行PnP检测 {pnp_checked_count} 条"
+                )
+            except Exception as e:
+                status_parts.append(f"⚠️ 任务统计查询失败: {e}")
         
         # 获取关节数据 (快)
         joint_data = None
@@ -212,8 +278,6 @@ def register_callbacks(app):
                 status_parts.append("⚠️ 未找到关节数据")
         except Exception as e:
             status_parts.append(f"❌ 关节数据加载失败: {e}")
-
-        status_parts.append("⏳ 视频文件正在后台处理转码，请耐心等候...")
 
         status_msg = html.Div(
             [html.Div(s, style={"fontSize": "13px", "marginBottom": "2px"}) for s in status_parts],
