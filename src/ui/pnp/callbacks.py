@@ -54,11 +54,13 @@ def register_callbacks(app):
         Output("pnp-modal-task-search", "options"),
         Input("pnp-modal-task-search", "search_value"),
         State("pnp-modal-task-search", "value"),
+        State("pnp-modal-single-task", "value"),
         prevent_initial_call=False,
     )
-    def load_modal_task_options(search_value, current_value):
+    def load_modal_task_options(search_value, current_value, is_single_task):
         """弹窗内加载任务列表。"""
         try:
+            limit_sql = "LIMIT 100" if is_single_task else ""
             if search_value:
                 sql = """
                     SELECT DISTINCT task_id
@@ -66,18 +68,18 @@ def register_callbacks(app):
                     WHERE valid = true
                       AND CAST(task_id AS TEXT) LIKE %(search)s
                     ORDER BY task_id
-                    LIMIT 100
+                    {limit_sql}
                 """
-                df = query_df(sql, {"search": f"%{search_value}%"})
+                df = query_df(sql.format(limit_sql=limit_sql), {"search": f"%{search_value}%"})
             else:
                 sql = """
                     SELECT DISTINCT task_id
                     FROM episodes
                     WHERE valid = true
                     ORDER BY task_id
-                    LIMIT 100
+                    {limit_sql}
                 """
-                df = query_df(sql)
+                df = query_df(sql.format(limit_sql=limit_sql))
 
             options = [{"label": str(t), "value": str(t)} for t in df["task_id"]]
 

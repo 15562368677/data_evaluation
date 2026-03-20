@@ -10,6 +10,34 @@ from src.utils.source_db import query_df
 from src.utils.result_db import query_pnp_df, get_pnp_connection
 from src.utils.data_parser import get_video_url
 
+
+def _normalize_segments(raw_val):
+    if not raw_val:
+        return []
+    parsed = raw_val
+    if isinstance(raw_val, str):
+        try:
+            parsed = json.loads(raw_val)
+        except Exception:
+            return []
+    if not isinstance(parsed, list):
+        return []
+
+    segments = []
+    for seg in parsed:
+        if not isinstance(seg, (list, tuple)) or len(seg) < 2:
+            continue
+        try:
+            st = float(seg[0])
+            ed = float(seg[1])
+        except Exception:
+            continue
+        if ed < st:
+            st, ed = ed, st
+        segments.append([st, ed])
+    return segments
+
+
 def register_callbacks(app):
     
     app.clientside_callback(
@@ -59,40 +87,55 @@ def register_callbacks(app):
                 if (video && wrapper && playhead && !video.dataset.syncBound) {
                     video.dataset.syncBound = '1';
                     
+                    var updatePlayhead = function() {
+                        var duration = video.duration;
+                        if (!Number.isFinite(duration) || duration <= 0) {
+                            playhead.style.left = '0%';
+                            return;
+                        }
+                        var pct = (video.currentTime / duration) * 100;
+                        playhead.style.left = Math.min(100, Math.max(0, pct)) + '%';
+                    };
+
                     var drawBlocks = function() {
-                        var duration = video.duration || 1; 
+                        var duration = video.duration;
                         var r_tracks = document.getElementById('right-hand-tracks');
                         var l_tracks = document.getElementById('left-hand-tracks');
                         if (r_tracks && l_tracks) {
+                            if (!Number.isFinite(duration) || duration <= 0) {
+                                r_tracks.innerHTML = '';
+                                l_tracks.innerHTML = '';
+                                updatePlayhead();
+                                return;
+                            }
                             try {
                                 var r_data = JSON.parse(wrapper.dataset.right || "[]");
                                 var l_data = JSON.parse(wrapper.dataset.left || "[]");
-                                
-                                var determine_sec_format = function(data) {
-                                    if(data.length === 0) return true;
-                                    // if the value is unreasonably large (like frame 5000) vs a 150s video
-                                    return data[data.length-1][1] < 500;
+                                var clampPct = function(value) {
+                                    return Math.min(100, Math.max(0, value));
                                 };
-                                var is_r_sec = determine_sec_format(r_data);
-                                var is_l_sec = determine_sec_format(l_data);
-                                var approx_fps = 62.512;
-                                
                                 var r_html = "";
                                 for(var i=0; i<r_data.length; i++){
-                                    var st_sec = is_r_sec ? r_data[i][0] : (r_data[i][0] / approx_fps);
-                                    var ed_sec = is_r_sec ? r_data[i][1] : (r_data[i][1] / approx_fps);
-                                    var left_pct = (st_sec / duration) * 100;
-                                    var width_pct = ((ed_sec - st_sec) / duration) * 100;
+                                    var st_sec = Number(r_data[i][0]);
+                                    var ed_sec = Number(r_data[i][1]);
+                                    if (!Number.isFinite(st_sec) || !Number.isFinite(ed_sec)) { continue; }
+                                    st_sec = Math.min(duration, Math.max(0, st_sec));
+                                    ed_sec = Math.min(duration, Math.max(st_sec, ed_sec));
+                                    var left_pct = clampPct((st_sec / duration) * 100);
+                                    var width_pct = clampPct(((ed_sec - st_sec) / duration) * 100);
                                     r_html += "<div style='position:absolute; left:" + left_pct + "%; width:" + width_pct + "%; height:100%; background:rgba(59, 130, 246, 0.7); border-radius:3px;'></div>";
                                 }
                                 r_tracks.innerHTML = r_html;
-                                
+
                                 var l_html = "";
                                 for(var i=0; i<l_data.length; i++){
-                                    var st_sec = is_l_sec ? l_data[i][0] : (l_data[i][0] / approx_fps);
-                                    var ed_sec = is_l_sec ? l_data[i][1] : (l_data[i][1] / approx_fps);
-                                    var left_pct = (st_sec / duration) * 100;
-                                    var width_pct = ((ed_sec - st_sec) / duration) * 100;
+                                    var st_sec = Number(l_data[i][0]);
+                                    var ed_sec = Number(l_data[i][1]);
+                                    if (!Number.isFinite(st_sec) || !Number.isFinite(ed_sec)) { continue; }
+                                    st_sec = Math.min(duration, Math.max(0, st_sec));
+                                    ed_sec = Math.min(duration, Math.max(st_sec, ed_sec));
+                                    var left_pct = clampPct((st_sec / duration) * 100);
+                                    var width_pct = clampPct(((ed_sec - st_sec) / duration) * 100);
                                     l_html += "<div style='position:absolute; left:" + left_pct + "%; width:" + width_pct + "%; height:100%; background:rgba(16, 185, 129, 0.7); border-radius:3px;'></div>";
                                 }
                                 l_tracks.innerHTML = l_html;
@@ -101,17 +144,20 @@ def register_callbacks(app):
                     };
 
                     video.addEventListener('loadedmetadata', drawBlocks);
+                    video.addEventListener('durationchange', drawBlocks);
                     if (video.readyState >= 1) { drawBlocks(); }
                     
-                    video.addEventListener('timeupdate', function(){
-                        var pct = (video.currentTime / (video.duration || 1)) * 100;
-                        playhead.style.left = Math.min(100, Math.max(0, pct)) + '%';
+                    video.addEventListener('timeupdate', updatePlayhead);
+                    video.addEventListener('seeking', updatePlayhead);
+                    video.addEventListener('seeked', function(){
+                        updatePlayhead();
+                        drawBlocks();
                     });
                     
                     wrapper.addEventListener('click', function(e){
                         var rect = wrapper.getBoundingClientRect();
                         var pct = (e.clientX - rect.left) / rect.width;
-                        if(video.duration) {
+                        if(Number.isFinite(video.duration) && video.duration > 0) {
                             video.currentTime = Math.min(1, Math.max(0, pct)) * video.duration;
                         }
                     });
@@ -716,8 +762,8 @@ def register_callbacks(app):
             # 简单统计一下左右手分别发现了多少次
             r_val = row['right_pnp_result']
             l_val = row['left_pnp_result']
-            r_res = r_val if isinstance(r_val, list) else (json.loads(r_val) if r_val else [])
-            l_res = l_val if isinstance(l_val, list) else (json.loads(l_val) if l_val else [])
+            r_res = _normalize_segments(r_val)
+            l_res = _normalize_segments(l_val)
             r_count = len(r_res)
             l_count = len(l_res)
 
@@ -850,8 +896,8 @@ def register_callbacks(app):
             else:
                 r_val = pnp_df.iloc[0]['right_pnp_result']
                 l_val = pnp_df.iloc[0]['left_pnp_result']
-                right_res = r_val if isinstance(r_val, list) else (json.loads(r_val) if r_val else [])
-                left_res = l_val if isinstance(l_val, list) else (json.loads(l_val) if l_val else [])
+                right_res = _normalize_segments(r_val)
+                left_res = _normalize_segments(l_val)
                 
                 timeline_elem = html.Div(
                     id="custom-timeline-wrapper",

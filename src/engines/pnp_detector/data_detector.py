@@ -362,7 +362,7 @@ def pick_identify(
        - 四个手指（系数=-1）：state_action_diff < negative_diff_threshold (默认 -0.022)
        - 拇指（系数=+1）：state_action_diff > positive_diff_threshold (默认 0.03)
        - 需要验证 state/action 斜率稳定性：|val[i+lookahead] - val[i]| / lookahead ≤ slope_threshold
-    -> pick_start = i + pick_start_offset (默认 -10)
+    -> pick_start = i + pick_start_offset (默认 -5)
 
     Place 判定条件（同时满足）：
     1) 帧范围 [i, i + place_diff_lookahead) 内所有帧的满足差值条件的关节数都 < min_joints_for_diff
@@ -484,6 +484,5 @@ def pick_identify(
             pick_start = None
 
     return picks
-
 
 

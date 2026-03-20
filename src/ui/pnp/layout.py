@@ -6,7 +6,7 @@ import dash_bootstrap_components as dbc
 # PnP 默认参数
 PNP_DEFAULT_PARAMS = {
     "pick_closure_threshold": 0.35,
-    "pick_start_offset": -10,
+    "pick_start_offset": -5,
     "place_closure_threshold": 0.35,
     "place_velocity_threshold": -0.02,
     "place_velocity_lookback": 5,

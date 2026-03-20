@@ -1070,39 +1070,55 @@ def register_callbacks(app):
                 if (video && wrapper && playhead && !video.dataset.syncBound) {
                     video.dataset.syncBound = '1';
                     
+                    var updatePlayhead = function() {
+                        var duration = video.duration;
+                        if (!Number.isFinite(duration) || duration <= 0) {
+                            playhead.style.left = '0%';
+                            return;
+                        }
+                        var pct = (video.currentTime / duration) * 100;
+                        playhead.style.left = Math.min(100, Math.max(0, pct)) + '%';
+                    };
+
                     var drawBlocks = function() {
-                        var duration = video.duration || 1; 
+                        var duration = video.duration;
                         var r_tracks = document.getElementById('pnp-check-right-hand-tracks');
                         var l_tracks = document.getElementById('pnp-check-left-hand-tracks');
                         if (r_tracks && l_tracks) {
+                            if (!Number.isFinite(duration) || duration <= 0) {
+                                r_tracks.innerHTML = '';
+                                l_tracks.innerHTML = '';
+                                updatePlayhead();
+                                return;
+                            }
                             try {
                                 var r_data = JSON.parse(wrapper.dataset.right || "[]");
                                 var l_data = JSON.parse(wrapper.dataset.left || "[]");
-                                
-                                var determine_sec_format = function(data) {
-                                    if(data.length === 0) return true;
-                                    return data[data.length-1][1] < 500;
+                                var clampPct = function(value) {
+                                    return Math.min(100, Math.max(0, value));
                                 };
-                                var is_r_sec = determine_sec_format(r_data);
-                                var is_l_sec = determine_sec_format(l_data);
-                                var approx_fps = 62.512;
-                                
                                 var r_html = "";
                                 for(var i=0; i<r_data.length; i++){
-                                    var st_sec = is_r_sec ? r_data[i][0] : (r_data[i][0] / approx_fps);
-                                    var ed_sec = is_r_sec ? r_data[i][1] : (r_data[i][1] / approx_fps);
-                                    var left_pct = (st_sec / duration) * 100;
-                                    var width_pct = ((ed_sec - st_sec) / duration) * 100;
+                                    var st_sec = Number(r_data[i][0]);
+                                    var ed_sec = Number(r_data[i][1]);
+                                    if (!Number.isFinite(st_sec) || !Number.isFinite(ed_sec)) { continue; }
+                                    st_sec = Math.min(duration, Math.max(0, st_sec));
+                                    ed_sec = Math.min(duration, Math.max(st_sec, ed_sec));
+                                    var left_pct = clampPct((st_sec / duration) * 100);
+                                    var width_pct = clampPct(((ed_sec - st_sec) / duration) * 100);
                                     r_html += "<div style='position:absolute; left:" + left_pct + "%; width:" + width_pct + "%; height:100%; background:rgba(59, 130, 246, 0.7); border-radius:3px;'></div>";
                                 }
                                 r_tracks.innerHTML = r_html;
-                                
+
                                 var l_html = "";
                                 for(var i=0; i<l_data.length; i++){
-                                    var st_sec = is_l_sec ? l_data[i][0] : (l_data[i][0] / approx_fps);
-                                    var ed_sec = is_l_sec ? l_data[i][1] : (l_data[i][1] / approx_fps);
-                                    var left_pct = (st_sec / duration) * 100;
-                                    var width_pct = ((ed_sec - st_sec) / duration) * 100;
+                                    var st_sec = Number(l_data[i][0]);
+                                    var ed_sec = Number(l_data[i][1]);
+                                    if (!Number.isFinite(st_sec) || !Number.isFinite(ed_sec)) { continue; }
+                                    st_sec = Math.min(duration, Math.max(0, st_sec));
+                                    ed_sec = Math.min(duration, Math.max(st_sec, ed_sec));
+                                    var left_pct = clampPct((st_sec / duration) * 100);
+                                    var width_pct = clampPct(((ed_sec - st_sec) / duration) * 100);
                                     l_html += "<div style='position:absolute; left:" + left_pct + "%; width:" + width_pct + "%; height:100%; background:rgba(16, 185, 129, 0.7); border-radius:3px;'></div>";
                                 }
                                 l_tracks.innerHTML = l_html;
@@ -1111,17 +1127,20 @@ def register_callbacks(app):
                     };
 
                     video.addEventListener('loadedmetadata', drawBlocks);
+                    video.addEventListener('durationchange', drawBlocks);
                     if (video.readyState >= 1) { drawBlocks(); }
                     
-                    video.addEventListener('timeupdate', function(){
-                        var pct = (video.currentTime / (video.duration || 1)) * 100;
-                        playhead.style.left = Math.min(100, Math.max(0, pct)) + '%';
+                    video.addEventListener('timeupdate', updatePlayhead);
+                    video.addEventListener('seeking', updatePlayhead);
+                    video.addEventListener('seeked', function(){
+                        updatePlayhead();
+                        drawBlocks();
                     });
                     
                     wrapper.addEventListener('click', function(e){
                         var rect = wrapper.getBoundingClientRect();
                         var pct = (e.clientX - rect.left) / rect.width;
-                        if(video.duration) {
+                        if(Number.isFinite(video.duration) && video.duration > 0) {
                             video.currentTime = Math.min(1, Math.max(0, pct)) * video.duration;
                         }
                     });
