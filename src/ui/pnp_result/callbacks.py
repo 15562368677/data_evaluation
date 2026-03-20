@@ -525,6 +525,18 @@ def register_callbacks(app):
         return "失败记录", True, None
 
     @app.callback(
+        Output("pnp-res-selected-episode", "data", allow_duplicate=True),
+        [
+            Input("pnp-res-selected-batch", "data"),
+            Input("pnp-res-show-failed", "data"),
+            Input("pnp-res-episode-search", "value"),
+        ],
+        prevent_initial_call=True,
+    )
+    def reset_selected_episode_on_filters_change(_selected_batch, _show_failed, _search_value):
+        return None
+
+    @app.callback(
         Output("pnp-res-show-failed", "data", allow_duplicate=True),
         Input("pnp-res-selected-batch", "data"),
         prevent_initial_call=True,
@@ -538,19 +550,20 @@ def register_callbacks(app):
          Output("pnp-res-episode-page", "data")],
         [Input("pnp-res-selected-batch", "data"),
          Input("pnp-res-episode-load-more-btn", "n_clicks"),
-         Input("pnp-res-show-failed", "data")],
+         Input("pnp-res-show-failed", "data"),
+         Input("pnp-res-episode-search", "value")],
         [State("pnp-res-episode-page", "data"),
          State("pnp-res-episode-list", "children"),
          State("pnp-res-selected-episode", "data")],
         prevent_initial_call=True
     )
-    def update_episode_list(selected_batch, load_more_clicks, show_failed, page, current_children, selected_episode):
+    def update_episode_list(selected_batch, load_more_clicks, show_failed, search_value, page, current_children, selected_episode):
         trigger = ctx.triggered_id
         
         if not selected_batch:
             return [], 1
             
-        if trigger in {"pnp-res-selected-batch", "pnp-res-show-failed"}:
+        if trigger in {"pnp-res-selected-batch", "pnp-res-show-failed", "pnp-res-episode-search"}:
             page = 1
             current_children = []
         elif trigger == "pnp-res-episode-load-more-btn":
@@ -558,26 +571,37 @@ def register_callbacks(app):
             
         limit = 20
         offset = (page - 1) * limit
+        search_value = (search_value or "").strip()
         
         if show_failed:
+            where_clause = "WHERE batch_id = %s"
+            params = [selected_batch]
+            if search_value:
+                where_clause += " AND CAST(episode_id AS TEXT) ILIKE %s"
+                params.append(f"%{search_value}%")
             sql = f"""
                 SELECT episode_id, error_message, failed_at
                 FROM pnp_failures
-                WHERE batch_id = %s
+                {where_clause}
                 ORDER BY failed_at DESC
                 LIMIT {limit} OFFSET {offset}
             """
         else:
+            where_clause = "WHERE batch_id = %s"
+            params = [selected_batch]
+            if search_value:
+                where_clause += " AND CAST(episode_id AS TEXT) ILIKE %s"
+                params.append(f"%{search_value}%")
             # 查询批次下的正常检测记录
             sql = f"""
                 SELECT episode_id, right_pnp_result, left_pnp_result, checked_at
                 FROM pnp_streams
-                WHERE batch_id = %s
+                {where_clause}
                 ORDER BY checked_at DESC
                 LIMIT {limit} OFFSET {offset}
             """
         try:
-            df = query_pnp_df(sql, (selected_batch,))
+            df = query_pnp_df(sql, tuple(params))
         except Exception as e:
             return current_children + [html.Div(f"加载出错: {e}", style={"color": "red"})], page
             
@@ -626,7 +650,10 @@ def register_callbacks(app):
                         return [fallback_item], page
                 except Exception:
                     pass
-            empty_text = "该批次暂无失败记录" if show_failed else "该批次暂无检测记录"
+            if search_value:
+                empty_text = f"未找到 ID 包含 “{search_value}” 的失败记录" if show_failed else f"未找到 ID 包含 “{search_value}” 的检测记录"
+            else:
+                empty_text = "该批次暂无失败记录" if show_failed else "该批次暂无检测记录"
             return [html.Div(empty_text, style={"color": "#9ca3af", "textAlign": "center"})], page
         elif df.empty:
             return current_children, page

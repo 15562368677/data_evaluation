@@ -85,6 +85,21 @@ def layout():
                         ),
                         html.Span("每次加载 20 条，滚动到底部继续加载", style={"fontSize": "12px", "color": "#6b7280"}),
                     ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "15px"}),
+                    dcc.Input(
+                        id="pnp-res-episode-search",
+                        type="text",
+                        placeholder="搜索 Episode ID...",
+                        debounce=True,
+                        style={
+                            "width": "100%",
+                            "marginBottom": "12px",
+                            "padding": "8px 12px",
+                            "border": "1px solid #d1d5db",
+                            "borderRadius": "6px",
+                            "fontSize": "13px",
+                            "outline": "none",
+                        },
+                    ),
                     html.Div(id="pnp-res-action-msg", style={"fontSize": "12px", "marginBottom": "8px"}),
                     
                     html.Div(

@@ -785,16 +785,18 @@ def register_callbacks(app):
             Input("pnp-check-show-checked", "data"),
             Input("pnp-check-load-more-btn", "n_clicks"),
             Input("pnp-check-selected-video", "data"),
+            Input("pnp-check-episode-search", "value"),
         ],
         [
             State("pnp-check-row-status", "data"),
             State("pnp-check-page", "data"),
         ],
     )
-    def update_table(all_data, applied_filters, submitted, show_checked, load_more, selected_episode, row_status, page):
+    def update_table(all_data, applied_filters, submitted, show_checked, load_more, selected_episode, search_value, row_status, page):
         submitted = submitted or {"pass": [], "multi_pick": [], "fail_pick": [], "invalid": []}
         show_checked = bool(show_checked)
         applied_filters = applied_filters or {}
+        search_value = str(search_value or "").strip()
         r_vis = applied_filters.get("r_count", []) or []
         l_vis = applied_filters.get("l_count", []) or []
         r_d_vis = applied_filters.get("r_duration", []) or []
@@ -810,6 +812,7 @@ def register_callbacks(app):
             "pnp-check-applied-filters",
             "pnp-check-show-checked",
             "pnp-check-submitted",
+            "pnp-check-episode-search",
         ]:
             page = 1
         else:
@@ -847,19 +850,21 @@ def register_callbacks(app):
         l_a_vis_set = set(l_a_vis) if l_a_vis else None
 
         def _row_match_filters(row):
+            ep_id = str(row.get("episode_id", ""))
             rc = int(row.get("r_count", 0))
             lc = int(row.get("l_count", 0))
             r_d_tag = str(row.get("r_duration_tag", "none"))
             l_d_tag = str(row.get("l_duration_tag", "none"))
             r_a_tag = str(row.get("r_axis_tag", "none"))
             l_a_tag = str(row.get("l_axis_tag", "none"))
+            search_ok = (not search_value) or (search_value.lower() in ep_id.lower())
             r_ok = (r_vis_set is None) or (rc in r_vis_set)
             l_ok = (l_vis_set is None) or (lc in l_vis_set)
             r_d_ok = (r_d_vis_set is None) or (r_d_tag in r_d_vis_set)
             l_d_ok = (l_d_vis_set is None) or (l_d_tag in l_d_vis_set)
             r_a_ok = (r_a_vis_set is None) or (r_a_tag in r_a_vis_set)
             l_a_ok = (l_a_vis_set is None) or (l_a_tag in l_a_vis_set)
-            return r_ok and l_ok and r_d_ok and l_d_ok and r_a_ok and l_a_ok
+            return search_ok and r_ok and l_ok and r_d_ok and l_d_ok and r_a_ok and l_a_ok
 
         if not show_checked:
             # Show unchecked & unsubmitted
@@ -890,9 +895,11 @@ def register_callbacks(app):
             sel_l_d = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(l_d_vis_set)) if l_d_vis_set else "全部"
             sel_r_a = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(r_a_vis_set)) if r_a_vis_set else "全部"
             sel_l_a = ",".join(OUTLIER_LABEL.get(x, x) for x in sorted(l_a_vis_set)) if l_a_vis_set else "全部"
+            search_text = search_value if search_value else "全部"
             summary = (
                 f"当前范围内包含 {len(visible_rows)} 条未检测数据"
-                f"（次数: 右{sel_r_str}/左{sel_l_str}；"
+                f"（ID搜索: {search_text}；"
+                f"次数: 右{sel_r_str}/左{sel_l_str}；"
                 f"时长离群: 右{sel_r_d}/左{sel_l_d}；"
                 f"时间轴离群: 右{sel_r_a}/左{sel_l_a}）。"
             )
@@ -914,7 +921,10 @@ def register_callbacks(app):
                     cards.append(html.Div("往下滚动加载更多...", style={"textAlign": "center", "color": "#6b7280", "padding": "10px", "fontSize": "12px", "marginTop": "10px"}))
                 table_ui = html.Div(cards)
 
-            summary = f"当前任务中包含 {len(checked_rows)} 条已检测数据。"
+            if search_value:
+                summary = f"当前任务中包含 {len(checked_rows)} 条已检测数据（ID搜索: {search_value}）。"
+            else:
+                summary = f"当前任务中包含 {len(checked_rows)} 条已检测数据。"
             return table_ui, [], summary, btn_label, False, page
 
     # 4. 点击卡片上的按钮播放对应视频及渲染 PnP 时间轴
@@ -924,10 +934,11 @@ def register_callbacks(app):
             Input("pnp-check-query-data", "data"),
             Input("pnp-check-applied-filters", "data"),
             Input("pnp-check-show-checked", "data"),
+            Input("pnp-check-episode-search", "value"),
         ],
         prevent_initial_call=True,
     )
-    def reset_selected_video_on_dataset_change(_all_data, _filters, _show_checked):
+    def reset_selected_video_on_dataset_change(_all_data, _filters, _show_checked, _search_value):
         # 数据集或筛选条件变化时，清空已选视频，避免视频/时间轴与当前卡片列表错位
         return None
 

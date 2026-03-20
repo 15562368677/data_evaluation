@@ -268,6 +268,28 @@ def layout():
                     ),
 
                     html.Div(id="pnp-check-action-message", style={"marginBottom": "10px"}),
+                    html.Div(
+                        dcc.Input(
+                            id="pnp-check-episode-search",
+                            type="text",
+                            placeholder="搜索 Episode ID...",
+                            debounce=True,
+                            style={
+                                "width": "100%",
+                                "padding": "8px 12px",
+                                "border": "1px solid #d1d5db",
+                                "borderRadius": "6px",
+                                "fontSize": "13px",
+                                "outline": "none",
+                            },
+                        ),
+                        style={
+                            "display": "grid",
+                            "gridTemplateColumns": "1fr 320px",
+                            "gap": "12px",
+                            "marginBottom": "12px",
+                        },
+                    ),
 
                     # 主内容区：左侧表格 + 右侧侧边栏
                     html.Div(
