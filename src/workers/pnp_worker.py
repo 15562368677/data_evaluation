@@ -34,7 +34,7 @@ def load_joint_data_as_dfs(episode_id: str, config: dict):
     if not parsed_data:
         return None, None
 
-    all_joints = config['right_hand_fingers'] + config['additional_joints']
+    all_joints = config['right_hand_fingers']
     
     # 构建 state_df
     state_df = pd.DataFrame({'timestamp_utc': parsed_data.get('absolute_timestamps_state', [])})
@@ -97,10 +97,9 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         **params_dict
     }
 
-    # Config combined for loading data frames (which checks right_hand_fingers + additional_joints)
+    # Config combined for loading data frames for both hands.
     config_load = {
         'right_hand_fingers': config_right['right_hand_fingers'] + config_left['right_hand_fingers'],
-        'additional_joints': config_right['additional_joints'] + config_left['additional_joints']
     }
 
     # Retrieve episodes
@@ -117,31 +116,10 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     )
     total_episodes = [str(e) for e in episodes_df['id'].tolist()]
     
-    # Exclude episodes marked as invalid in duration_results.
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT DISTINCT episode_id
-                FROM duration_results
-                WHERE duration_result = 'invalid'
-                  AND CAST(task_id AS TEXT) = %s
-                """,
-                (str(task_id),),
-            )
-            invalid_duration_episodes = {str(row[0]) for row in cur.fetchall()}
-    except Exception as e:
-        conn.close()
-        raise RuntimeError(f"Failed to query invalid duration episodes for task_id={task_id}: {e}") from e
-
-    if invalid_duration_episodes:
-        before_invalid_filter = len(total_episodes)
-        total_episodes = [ep for ep in total_episodes if ep not in invalid_duration_episodes]
-        excluded_count = before_invalid_filter - len(total_episodes)
-        logging.info(
-            f"[PNP] task_id={task_id}: excluded invalid duration episodes = {excluded_count} "
-            f"(invalid_pool={len(invalid_duration_episodes)}, before={before_invalid_filter}, after={len(total_episodes)})"
-        )
+    logging.info(
+        f"[PNP] task_id={task_id}: duration_result='invalid' episodes will be kept for PnP validation "
+        f"(episode_count={len(total_episodes)})"
+    )
     
     # Apply overwrite rule
     if not overwrite:
@@ -242,12 +220,9 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         
         closure_degrees = closure_df['closure_degree'].to_numpy()
         closure_velocities = closure_df['closure_velocity'].to_numpy()
-        elbow_angles = np.zeros(len(closure_degrees))
-
         picks = pick_identify(
             closure_degrees=closure_degrees,
             closure_velocities=closure_velocities,
-            elbow_angles=elbow_angles,
             state_action_diffs=diffs,
             config=hand_config,
             state_df=st_df,

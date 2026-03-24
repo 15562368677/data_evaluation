@@ -1,5 +1,7 @@
 """PnP 筛选页面回调。"""
 
+from urllib.parse import quote
+
 import json
 import logging
 import pandas as pd
@@ -858,13 +860,26 @@ def register_callbacks(app):
             r_a_tag = str(row.get("r_axis_tag", "none"))
             l_a_tag = str(row.get("l_axis_tag", "none"))
             search_ok = (not search_value) or (search_value.lower() in ep_id.lower())
-            r_ok = (r_vis_set is None) or (rc in r_vis_set)
-            l_ok = (l_vis_set is None) or (lc in l_vis_set)
-            r_d_ok = (r_d_vis_set is None) or (r_d_tag in r_d_vis_set)
-            l_d_ok = (l_d_vis_set is None) or (l_d_tag in l_d_vis_set)
-            r_a_ok = (r_a_vis_set is None) or (r_a_tag in r_a_vis_set)
-            l_a_ok = (l_a_vis_set is None) or (l_a_tag in l_a_vis_set)
-            return search_ok and r_ok and l_ok and r_d_ok and l_d_ok and r_a_ok and l_a_ok
+            if not search_ok:
+                return False
+
+            filter_matches = []
+            if r_vis_set is not None:
+                filter_matches.append(rc in r_vis_set)
+            if l_vis_set is not None:
+                filter_matches.append(lc in l_vis_set)
+            if r_d_vis_set is not None:
+                filter_matches.append(r_d_tag in r_d_vis_set)
+            if l_d_vis_set is not None:
+                filter_matches.append(l_d_tag in l_d_vis_set)
+            if r_a_vis_set is not None:
+                filter_matches.append(r_a_tag in r_a_vis_set)
+            if l_a_vis_set is not None:
+                filter_matches.append(l_a_tag in l_a_vis_set)
+
+            if not filter_matches:
+                return True
+            return any(filter_matches)
 
         if not show_checked:
             # Show unchecked & unsubmitted
@@ -901,7 +916,8 @@ def register_callbacks(app):
                 f"（ID搜索: {search_text}；"
                 f"次数: 右{sel_r_str}/左{sel_l_str}；"
                 f"时长离群: 右{sel_r_d}/左{sel_l_d}；"
-                f"时间轴离群: 右{sel_r_a}/左{sel_l_a}）。"
+                f"时间轴离群: 右{sel_r_a}/左{sel_l_a}；"
+                f"筛选关系: OR）。"
             )
             return table_ui, visible_ids, summary, btn_label, True, page
 
@@ -1020,10 +1036,26 @@ def register_callbacks(app):
                 file_path = str(df.iloc[0]["file_path"])
                 video_url = get_video_url(file_path)
                 if video_url:
+                    source_key = str(file_path or video_url)
                     if video_url.startswith("http"):
-                        video_elem = html.Video(id="pnp-check-video-player", key=episode_id, autoPlay=True, src=video_url, controls=True, style={"width": "100%", "backgroundColor": "#000", "maxHeight": "400px"})
+                        separator = "&" if "?" in video_url else "?"
+                        final_src = f"{video_url}{separator}pnp_src_key={quote(source_key, safe='')}"
                     else:
-                        video_elem = html.Video(id="pnp-check-video-player", key=episode_id, autoPlay=True, src=f"/pnp_video?path={video_url}", controls=True, style={"width": "100%", "backgroundColor": "#000", "maxHeight": "400px"})
+                        final_src = f"/pnp_video?path={quote(video_url, safe='')}&pnp_src_key={quote(source_key, safe='')}"
+
+                    video_elem = html.Div(
+                        key=episode_id,
+                        style={"width": "100%", "display": "flex", "justifyContent": "center"},
+                        children=[
+                            html.Video(
+                                id="pnp-check-video-player",
+                                autoPlay=True,
+                                src=final_src,
+                                controls=True,
+                                style={"width": "100%", "backgroundColor": "#000", "maxHeight": "400px"}
+                            )
+                        ]
+                    )
                 else:
                     video_elem = html.Div("视频解析失败", style={"color": "red"})
         except Exception as e:

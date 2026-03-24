@@ -13,7 +13,6 @@ HAND_CONFIG_BASE = {
             'R_middle_proximal_joint', 'R_index_proximal_joint',
             'R_thumb_proximal_pitch_joint'
         ],
-        'additional_joints': ['right_elbow_pitch_joint'],
         'joint_direction_coefficients': {
             'R_pinky_proximal_joint': -1.0,
             'R_ring_proximal_joint': -1.0,
@@ -28,7 +27,6 @@ HAND_CONFIG_BASE = {
             'L_middle_proximal_joint', 'L_index_proximal_joint',
             'L_thumb_proximal_pitch_joint'
         ],
-        'additional_joints': ['left_elbow_pitch_joint'],
         'joint_direction_coefficients': {
             'L_pinky_proximal_joint': -1.0,
             'L_ring_proximal_joint': -1.0,
@@ -347,7 +345,6 @@ def count_joints_satisfying_diff(
 def pick_identify(
     closure_degrees: np.ndarray,
     closure_velocities: np.ndarray,
-    elbow_angles: np.ndarray,
     state_action_diffs: dict,
     config: dict,
     state_df: pd.DataFrame = None,
@@ -484,5 +481,4 @@ def pick_identify(
             pick_start = None
 
     return picks
-
 
