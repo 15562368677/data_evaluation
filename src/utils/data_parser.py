@@ -240,7 +240,7 @@ def get_video_url(file_path: str) -> str | None:
         return generate_presigned_url(video_info["key"])
     else:
         # parquet 需要下载并转换
-        local_parquet = download_s3_file(video_info["key"])
+        local_parquet = download_s3_file(video_info["key"], cache_kind="video")
         if local_parquet is None:
             return None
         mp4_path = parquet_to_mp4(local_parquet)
@@ -368,12 +368,12 @@ def load_joint_data(file_path: str) -> dict | None:
         action_local = None
         state_local = None
         if "action_key" in joint_info:
-            action_local = download_s3_file(joint_info["action_key"])
+            action_local = download_s3_file(joint_info["action_key"], cache_kind="joints")
         if "state_key" in joint_info:
-            state_local = download_s3_file(joint_info["state_key"])
+            state_local = download_s3_file(joint_info["state_key"], cache_kind="joints")
         return parse_parquet_joints(action_local, state_local)
     else:
-        hdf5_local = download_s3_file(joint_info["key"])
+        hdf5_local = download_s3_file(joint_info["key"], cache_kind="joints")
         if hdf5_local is None:
             return None
         return parse_hdf5_joints(hdf5_local)
