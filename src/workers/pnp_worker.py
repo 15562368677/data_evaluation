@@ -3,23 +3,24 @@
 import time
 import json
 import logging
-import psycopg2
 import pandas as pd
 import numpy as np
-from pathlib import Path
 
+from src.acceptance_service import AcceptanceService
 from src.utils.source_db import query_df
-from src.utils.result_db import get_pnp_connection, init_pnp_db
-from src.utils.data_parser import load_joint_data
-
-from src.engines.pnp_detector.data_detector import (
-    HAND_CONFIG_BASE,
-    calculate_closure_metrics_from_dataframe,
-    pick_identify
+from src.utils.result_db import (
+    get_pnp_connection,
+    init_pnp_db,
+    init_qc_result_db,
+    query_pnp_df,
+    save_qc_results,
 )
+from src.utils.data_parser import load_joint_data
+from src.validators import EEActionValidator, ValidatorConfig
+from src.validators.ee_action_validator import build_task_en
 
 
-def load_joint_data_as_dfs(episode_id: str, config: dict):
+def load_joint_data_as_dfs(episode_id: str, config: ValidatorConfig):
     """
     Find remote files, download and parse into DataFrames using utils/data_parser.
     """
@@ -34,7 +35,7 @@ def load_joint_data_as_dfs(episode_id: str, config: dict):
     if not parsed_data:
         return None, None
 
-    all_joints = config['right_hand_fingers']
+    all_joints = config.get_all_hand_joints()
     
     # 构建 state_df
     state_df = pd.DataFrame({'timestamp_utc': parsed_data.get('absolute_timestamps_state', [])})
@@ -55,9 +56,142 @@ def load_joint_data_as_dfs(episode_id: str, config: dict):
     return state_df, action_df
 
 
+def _normalize_segments(raw_val):
+    if not raw_val:
+        return []
+    parsed = raw_val
+    if isinstance(raw_val, str):
+        try:
+            parsed = json.loads(raw_val)
+        except Exception:
+            return []
+    if not isinstance(parsed, list):
+        return []
+
+    segments = []
+    for seg in parsed:
+        if not isinstance(seg, (list, tuple)) or len(seg) < 2:
+            continue
+        try:
+            st_sec = float(seg[0])
+            ed_sec = float(seg[1])
+        except Exception:
+            continue
+        if ed_sec < st_sec:
+            st_sec, ed_sec = ed_sec, st_sec
+        segments.append([st_sec, ed_sec])
+    return segments
+
+
+def _estimate_duration_from_segments(right_raw, left_raw):
+    max_end = 0.0
+    for raw_val in (right_raw, left_raw):
+        for seg in _normalize_segments(raw_val):
+            max_end = max(max_end, float(seg[1]))
+    return max_end if max_end > 0 else None
+
+
+def _load_task_episode_duration_map(episode_ids):
+    if not episode_ids:
+        return {}
+
+    duration_map = {}
+    meta_df = query_df(
+        """
+        SELECT id, trajectory_duration, trajectory_start, trajectory_end
+        FROM episodes
+        WHERE id IN %s
+        """,
+        (tuple(str(episode_id) for episode_id in episode_ids),),
+    )
+    for _, row in meta_df.iterrows():
+        episode_id = str(row.get("id"))
+        total_sec = None
+        trajectory_duration = row.get("trajectory_duration")
+        try:
+            if trajectory_duration is not None:
+                duration_val = float(trajectory_duration)
+                if duration_val > 0:
+                    total_sec = duration_val
+        except Exception:
+            total_sec = None
+
+        if (
+            (total_sec is None or total_sec <= 0)
+            and pd.notnull(row.get("trajectory_start"))
+            and pd.notnull(row.get("trajectory_end"))
+        ):
+            try:
+                total_sec = float(
+                    (row["trajectory_end"] - row["trajectory_start"]).total_seconds()
+                )
+            except Exception:
+                total_sec = None
+
+        if total_sec is not None and total_sec > 0:
+            duration_map[episode_id] = total_sec
+    return duration_map
+
+
+def _load_task_description_en(task_id: str) -> str:
+    task_df = query_df(
+        "SELECT descriptions FROM tasks WHERE id = %(task_id)s LIMIT 1",
+        {"task_id": task_id},
+    )
+    if task_df.empty:
+        return "Unknown task"
+    return build_task_en(task_df.iloc[0].get("descriptions"))
+
+
+def _rebuild_batch_qc_results(batch_id: str, task_id: str, validator_config: ValidatorConfig):
+    batch_df = query_pnp_df(
+        """
+        SELECT
+            s.episode_id,
+            s.right_pnp_result,
+            s.left_pnp_result
+        FROM pnp_streams s
+        WHERE s.batch_id = %s
+        ORDER BY s.episode_id
+        """,
+        (batch_id,),
+    )
+    if batch_df.empty:
+        return []
+
+    episode_ids = [str(value) for value in batch_df["episode_id"].tolist()]
+    duration_map = _load_task_episode_duration_map(episode_ids)
+    task_description_en = _load_task_description_en(task_id)
+
+    episode_payloads = []
+    for _, row in batch_df.iterrows():
+        episode_id = str(row["episode_id"])
+        right_raw = row.get("right_pnp_result")
+        left_raw = row.get("left_pnp_result")
+        episode_duration = duration_map.get(episode_id)
+        if episode_duration is None:
+            episode_duration = _estimate_duration_from_segments(right_raw, left_raw)
+
+        episode_payloads.append(
+            {
+                "episode_id": episode_id,
+                "episode_duration": episode_duration,
+                "right_pnp_result": right_raw,
+                "left_pnp_result": left_raw,
+            }
+        )
+
+    acceptance_service = AcceptanceService(config=validator_config)
+    return acceptance_service.validate_batch(
+        task_description_en=task_description_en,
+        episodes=episode_payloads,
+    )
+
+
 def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
     logging.info(f"Starting PNP Task: {uniq_id} for Task {task_id}")
     init_pnp_db()
+    init_qc_result_db()
 
     conn = get_pnp_connection()
     try:
@@ -86,21 +220,12 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         conn.close()
         raise e
 
-    # Configs for processing
-    config_right = {
-        **HAND_CONFIG_BASE['right'],
-        **params_dict
-    }
-
-    config_left = {
-        **HAND_CONFIG_BASE['left'],
-        **params_dict
-    }
-
-    # Config combined for loading data frames for both hands.
-    config_load = {
-        'right_hand_fingers': config_right['right_hand_fingers'] + config_left['right_hand_fingers'],
-    }
+    validator_overrides = {}
+    base_validator_config = ValidatorConfig()
+    for key, value in (params_dict or {}).items():
+        if hasattr(base_validator_config, key):
+            validator_overrides[key] = value
+    validator_config = ValidatorConfig(**validator_overrides)
 
     # Retrieve episodes
     episodes_df = query_df(
@@ -195,59 +320,10 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         f"(already_done={already_done}, total_in_batch={len(sampled_episodes)})"
     )
 
-    def process_hand(st_df, ac_df, hand_config):
-        closure_df = calculate_closure_metrics_from_dataframe(
-            st_df, 
-            hand_config['right_hand_fingers'], 
-            hand_config['joint_direction_coefficients']
-        )
-        
-        st = st_df.copy()
-        ac = ac_df.copy()
-        st = st.sort_values('timestamp_utc')
-        ac = ac.sort_values('timestamp_utc')
-        ac_cols = ['timestamp_utc'] + [col for col in hand_config['right_hand_fingers'] if col in ac.columns]
-        action_subset = ac[ac_cols]
-        merged = pd.merge_asof(st, action_subset, on='timestamp_utc', direction='nearest', suffixes=('', '_action'))
-        
-        diffs = {}
-        for joint in hand_config['right_hand_fingers']:
-            a_col = f"{joint}_action"
-            if joint in merged.columns and a_col in merged.columns:
-                diffs[joint] = (merged[a_col] - merged[joint]).to_numpy()
-            else:
-                diffs[joint] = np.full(len(st), np.nan)
-        
-        closure_degrees = closure_df['closure_degree'].to_numpy()
-        closure_velocities = closure_df['closure_velocity'].to_numpy()
-        picks = pick_identify(
-            closure_degrees=closure_degrees,
-            closure_velocities=closure_velocities,
-            state_action_diffs=diffs,
-            config=hand_config,
-            state_df=st_df,
-            action_df=ac_df
-        )
-        time_picks = []
-        for p in picks:
-            try:
-                if len(st_df) > 0 and 'timestamp_utc' in st_df.columns:
-                    t0 = st_df['timestamp_utc'].iloc[0]
-                    s_idx = max(0, min(p[0], len(st_df)-1))
-                    e_idx = max(0, min(p[1], len(st_df)-1))
-                    st_sec = (st_df['timestamp_utc'].iloc[s_idx] - t0).total_seconds()
-                    ed_sec = (st_df['timestamp_utc'].iloc[e_idx] - t0).total_seconds()
-                    time_picks.append([float(st_sec), float(ed_sec)])
-                else:
-                    time_picks.append([float(p[0])/60.0, float(p[1])/60.0])
-            except Exception as e:
-                logging.error(f"Error converting frames {p} to time: {e}")
-                time_picks.append([float(p[0])/60.0, float(p[1])/60.0])
-        return json.dumps(time_picks)
-
     failed_episodes = 0
     last_error_message = None
     processed_episodes = already_done
+    stream_validator = EEActionValidator(config=validator_config)
 
     def _record_failure(cur, ep_id: str, err_msg: str):
         cur.execute(
@@ -275,7 +351,7 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
             break
 
         try:
-            state_df, action_df = load_joint_data_as_dfs(episode_id, config_load)
+            state_df, action_df = load_joint_data_as_dfs(episode_id, validator_config)
             if state_df is None or action_df is None or len(state_df) == 0:
                 failed_episodes += 1
                 last_error_message = f"Episode {episode_id} has no valid joint data."
@@ -299,18 +375,27 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
             if 'timestamp_utc' in action_df.columns and not pd.api.types.is_datetime64_any_dtype(action_df['timestamp_utc']):
                 action_df['timestamp_utc'] = pd.to_datetime(action_df['timestamp_utc'], unit='s')
 
-            # Process both hands
-            right_json = process_hand(state_df, action_df, config_right)
-            left_json = process_hand(state_df, action_df, config_left)
+            detection_result = stream_validator.validate(
+                episode_id,
+                {
+                    "state_df": state_df,
+                    "action_df": action_df,
+                },
+            )
+            detection_details = detection_result.details or {}
+            right_segments = detection_details.get("right_pnp_result") or []
+            left_segments = detection_details.get("left_pnp_result") or []
+            right_json = json.dumps(right_segments)
+            left_json = json.dumps(left_segments)
 
             # Insert into database
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO pnp_streams (episode_id, batch_id, right_pnp_result, left_pnp_result)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO pnp_streams (episode_id, batch_id, pnp_result, right_pnp_result, left_pnp_result)
+                    VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT(episode_id, batch_id) 
-                    DO UPDATE SET right_pnp_result = %s, left_pnp_result = %s, checked_at = CURRENT_TIMESTAMP
-                """, (episode_id, uniq_id, right_json, left_json, right_json, left_json))
+                    DO UPDATE SET pnp_result = %s, right_pnp_result = %s, left_pnp_result = %s, checked_at = CURRENT_TIMESTAMP
+                """, (episode_id, uniq_id, None, right_json, left_json, None, right_json, left_json))
                 cur.execute(
                     "DELETE FROM pnp_failures WHERE episode_id = %s AND batch_id = %s",
                     (episode_id, uniq_id),
@@ -327,7 +412,10 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
             conn.commit()
             processed_episodes += 1
 
-            logging.info(f"Processed episode {episode_id}, found R:{len(json.loads(right_json))} L:{len(json.loads(left_json))} pick-place operations.")
+            logging.info(
+                f"Processed episode {episode_id}, found R:{len(right_segments)} "
+                f"L:{len(left_segments)} pick-place operations."
+            )
 
         except Exception as e:
             logging.error(f"Error processing episode {episode_id}: {e}")
@@ -370,6 +458,42 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         final_status = "partial"
     elif failed_episodes > 0 and processed_episodes == 0:
         final_status = "failed"
+
+    if final_status in {"success", "partial"} and processed_episodes > 0:
+        try:
+            batch_results = _rebuild_batch_qc_results(str(uniq_id), str(task_id), validator_config)
+            saved_qc_count = save_qc_results(
+                [{"episode_id": item["episode_id"], "result": item["result"]} for item in batch_results]
+            )
+            with conn.cursor() as cur:
+                for item in batch_results:
+                    cur.execute(
+                        """
+                        UPDATE pnp_streams
+                        SET pnp_result = %s,
+                            checked_at = CURRENT_TIMESTAMP
+                        WHERE episode_id = %s
+                          AND batch_id = %s
+                        """,
+                        (
+                            json.dumps(item["stream_summary"], ensure_ascii=False),
+                            item["episode_id"],
+                            uniq_id,
+                        ),
+                    )
+            conn.commit()
+            logging.info(
+                f"Rebuilt EEActionValidator QC results for batch {uniq_id}, task {task_id}: "
+                f"{saved_qc_count} episodes saved."
+            )
+        except Exception as exc:
+            conn.rollback()
+            logging.error(f"Failed to rebuild QC results for batch {uniq_id}, task {task_id}: {exc}")
+            last_error_message = f"QC rebuild failed: {exc}"
+            if processed_episodes > 0:
+                final_status = "partial"
+            else:
+                final_status = "failed"
 
     with conn.cursor() as cur:
         cur.execute(

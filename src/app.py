@@ -7,7 +7,12 @@ import dash_bootstrap_components as dbc
 
 from src.utils.source_db import query_df
 
-from src.utils.result_db import init_duration_result_db, init_pnp_result_db, init_pnp_db
+from src.utils.result_db import (
+    init_duration_result_db,
+    init_pnp_db,
+    init_pnp_result_db,
+    init_qc_result_db,
+)
 from src.ui import pilot, pnp, pnp_result, duration_check, pnp_check, sql_query
 
 app = dash.Dash(
@@ -21,6 +26,7 @@ app = dash.Dash(
 init_duration_result_db()
 init_pnp_result_db()
 init_pnp_db()
+init_qc_result_db()
 
 
 def load_initial_pilots():

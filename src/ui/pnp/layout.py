@@ -3,22 +3,9 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
-# PnP 默认参数
-PNP_DEFAULT_PARAMS = {
-    "pick_closure_threshold": 0.35,
-    "pick_start_offset": -5,
-    "place_closure_threshold": 0.35,
-    "place_velocity_threshold": -0.02,
-    "place_velocity_lookback": 5,
-    "place_velocity_lookahead": 0,
-    "place_diff_lookahead": 10,
-    "place_end_offset": 5,
-    "negative_diff_threshold": -0.08,
-    "positive_diff_threshold": 0.05,
-    "min_joints_for_diff": 2,
-    "slope_threshold": 0.0005,
-    "slope_lookahead": 10,
-}
+from src.validators.base import ValidatorConfig
+
+PNP_DEFAULT_PARAMS = ValidatorConfig().to_pnp_detection_params()
 
 def layout():
     """PnP 检测页面布局"""

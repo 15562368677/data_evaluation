@@ -1,8 +1,12 @@
 """数据库连接模块 (PnP Result)"""
 
 import os
+
 import psycopg2
+from psycopg2.extras import Json
 from dotenv import load_dotenv
+
+from src.validators.base import IssueLevel, ValidationResult
 
 load_dotenv()
 
@@ -222,6 +226,71 @@ def init_pnp_result_db():
     except Exception as e:
         logging.error(f"Failed to initialize pnp_results table: {e}")
 
+
+def init_qc_result_db():
+    """初始化统一 QC 结果表。"""
+    import logging
+
+    try:
+        conn = get_pnp_connection()
+        with conn.cursor() as cur:
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS qc_results (
+                id BIGSERIAL PRIMARY KEY,
+                episode_id VARCHAR(255) NOT NULL UNIQUE,
+                passed BOOLEAN,
+                overall_score DOUBLE PRECISION,
+                passed_count INTEGER,
+                failed_count INTEGER,
+                has_major_issue BOOLEAN,
+                has_blocker_issue BOOLEAN,
+                category_summary JSONB,
+                raw_json JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_qc_results_episode
+            ON qc_results (episode_id);
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS qc_categories (
+                id BIGSERIAL PRIMARY KEY,
+                qc_result_id BIGINT REFERENCES qc_results(id) ON DELETE CASCADE,
+                category VARCHAR(64),
+                passed BOOLEAN,
+                score DOUBLE PRECISION,
+                passed_count INTEGER,
+                failed_count INTEGER,
+                details JSONB,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS qc_issues (
+                id BIGSERIAL PRIMARY KEY,
+                qc_result_id BIGINT REFERENCES qc_results(id) ON DELETE CASCADE,
+                category_id BIGINT REFERENCES qc_categories(id) ON DELETE CASCADE,
+                category VARCHAR(64),
+                check_name VARCHAR(256),
+                level VARCHAR(16),
+                passed BOOLEAN,
+                value DOUBLE PRECISION,
+                threshold DOUBLE PRECISION,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """)
+            cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_qc_issues_result
+            ON qc_issues (qc_result_id);
+            """)
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Failed to initialize qc result tables: {e}")
+
 def save_pnp_results(records: list):
     """批量保存 pnp 检测结果到 pnp_results 表。
 
@@ -248,6 +317,148 @@ def save_pnp_results(records: list):
                         pnp_result = EXCLUDED.pnp_result,
                         created_at = CURRENT_TIMESTAMP
                 """, (ep_id, task_id, label))
+                count += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return count
+
+
+def save_qc_results(records: list):
+    """批量保存统一 QC 结果。"""
+    if not records:
+        return 0
+
+    conn = get_pnp_connection()
+    count = 0
+    try:
+        with conn.cursor() as cur:
+            for rec in records:
+                episode_id = str(rec.get("episode_id", ""))
+                result = rec.get("result")
+                if not episode_id or not isinstance(result, ValidationResult):
+                    continue
+
+                raw_json = result.to_dict()
+                category_summary = result.get_category_summary()
+                has_major_issue = any(
+                    issue.level == IssueLevel.MAJOR
+                    for issue in result.issues
+                )
+                has_blocker_issue = any(
+                    issue.level == IssueLevel.CRITICAL
+                    for issue in result.issues
+                )
+
+                cur.execute(
+                    """
+                    INSERT INTO qc_results (
+                        episode_id,
+                        passed,
+                        overall_score,
+                        passed_count,
+                        failed_count,
+                        has_major_issue,
+                        has_blocker_issue,
+                        category_summary,
+                        raw_json,
+                        updated_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                    ON CONFLICT (episode_id) DO UPDATE SET
+                        passed = EXCLUDED.passed,
+                        overall_score = EXCLUDED.overall_score,
+                        passed_count = EXCLUDED.passed_count,
+                        failed_count = EXCLUDED.failed_count,
+                        has_major_issue = EXCLUDED.has_major_issue,
+                        has_blocker_issue = EXCLUDED.has_blocker_issue,
+                        category_summary = EXCLUDED.category_summary,
+                        raw_json = EXCLUDED.raw_json,
+                        updated_at = CURRENT_TIMESTAMP
+                    RETURNING id
+                    """,
+                    (
+                        episode_id,
+                        result.passed,
+                        result.score,
+                        result.passed_count,
+                        result.failed_count,
+                        has_major_issue,
+                        has_blocker_issue,
+                        Json(category_summary),
+                        Json(raw_json),
+                    ),
+                )
+                qc_result_id = cur.fetchone()[0]
+
+                cur.execute(
+                    "DELETE FROM qc_categories WHERE qc_result_id = %s",
+                    (qc_result_id,),
+                )
+
+                category_name = None
+                if result.issues:
+                    category_name = result.issues[0].category
+                elif result.details:
+                    category_name = str(result.details.get("category", ""))
+
+                cur.execute(
+                    """
+                    INSERT INTO qc_categories (
+                        qc_result_id,
+                        category,
+                        passed,
+                        score,
+                        passed_count,
+                        failed_count,
+                        details
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        qc_result_id,
+                        category_name,
+                        result.passed,
+                        result.score,
+                        result.passed_count,
+                        result.failed_count,
+                        Json(result.details),
+                    ),
+                )
+                category_id = cur.fetchone()[0]
+
+                for issue in result.issues:
+                    cur.execute(
+                        """
+                        INSERT INTO qc_issues (
+                            qc_result_id,
+                            category_id,
+                            category,
+                            check_name,
+                            level,
+                            passed,
+                            value,
+                            threshold,
+                            message
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            qc_result_id,
+                            category_id,
+                            issue.category,
+                            issue.check_name,
+                            issue.level.value,
+                            issue.passed,
+                            issue.value,
+                            issue.threshold,
+                            issue.message,
+                        ),
+                    )
                 count += 1
         conn.commit()
     except Exception:

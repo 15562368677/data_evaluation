@@ -12,6 +12,7 @@ from src.utils.data_parser import (
     get_video_url,
     load_joint_data,
 )
+from src.validators.base import ValidatorConfig
 
 
 def register_callbacks(app):
@@ -644,12 +645,7 @@ def register_callbacks(app):
     from redis import Redis
     from rq import Queue
 
-    param_keys = [
-        "pick_closure_threshold", "pick_start_offset", "place_closure_threshold",
-        "place_velocity_threshold", "place_velocity_lookback", "place_velocity_lookahead",
-        "place_diff_lookahead", "place_end_offset", "negative_diff_threshold",
-        "positive_diff_threshold", "min_joints_for_diff", "slope_threshold", "slope_lookahead"
-    ]
+    param_keys = list(ValidatorConfig().to_pnp_detection_params().keys())
     param_states = [State(f"pnp-param-{k}", "value") for k in param_keys]
 
     @app.callback(

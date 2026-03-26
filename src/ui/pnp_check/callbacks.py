@@ -486,7 +486,7 @@ def register_callbacks(app):
         for _, row in df.iterrows():
             ep_id = str(row["episode_id"])
             row_task_id = str(row["task_id"])
-            
+
             r_val = row['right_pnp_result']
             l_val = row['left_pnp_result']
             r_res = _normalize_segments(r_val)
@@ -524,13 +524,15 @@ def register_callbacks(app):
             l_axis_score = sum(l_ratios) / len(l_ratios) if l_ratios else 0.0
             r_axis_points.extend(r_ratios)
             l_axis_points.extend(l_ratios)
-            
-            if r_count > max_r: max_r = r_count
-            if l_count > max_l: max_l = l_count
-            
+
+            if r_count > max_r:
+                max_r = r_count
+            if l_count > max_l:
+                max_l = l_count
+
             r_counts[r_count] = r_counts.get(r_count, 0) + 1
             l_counts[l_count] = l_counts.get(l_count, 0) + 1
-            
+
             parsed_data.append({
                 "episode_id": ep_id,
                 "task_id": row_task_id,
