@@ -764,6 +764,11 @@ def register_callbacks(app):
             from datetime import datetime
             from dotenv import load_dotenv
             from src.workers.pnp_worker import run_pnp_task
+            from src.workers.rq_defaults import (
+                RQ_FAILURE_TTL,
+                RQ_JOB_TIMEOUT,
+                RQ_RESULT_TTL,
+            )
 
             load_dotenv()
             redis_host = os.environ.get("REDIS_HOST", "localhost")
@@ -790,7 +795,9 @@ def register_callbacks(app):
                 job = q.enqueue(
                     run_pnp_task,
                     args=(u_id, t_id, sample_ratio, overwrite, params_dict),
-                    job_timeout=3600 # 默认为1小时，防超时
+                    job_timeout=RQ_JOB_TIMEOUT,
+                    result_ttl=RQ_RESULT_TTL,
+                    failure_ttl=RQ_FAILURE_TTL,
                 )
                 pushed_count += 1
                 

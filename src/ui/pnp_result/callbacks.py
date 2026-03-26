@@ -512,6 +512,11 @@ def register_callbacks(app):
                     import os
                     from dotenv import load_dotenv
                     from src.workers.pnp_worker import run_pnp_task
+                    from src.workers.rq_defaults import (
+                        RQ_FAILURE_TTL,
+                        RQ_JOB_TIMEOUT,
+                        RQ_RESULT_TTL,
+                    )
 
                     load_dotenv()
                     redis_conn = Redis(
@@ -537,7 +542,9 @@ def register_callbacks(app):
                             overwrite,
                             params,
                         ),
-                        job_timeout=3600,
+                        job_timeout=RQ_JOB_TIMEOUT,
+                        result_ttl=RQ_RESULT_TTL,
+                        failure_ttl=RQ_FAILURE_TTL,
                     )
                     msg = html.Span(f"批次 {batch_id} 已继续执行", style={"color": "#059669"})
 

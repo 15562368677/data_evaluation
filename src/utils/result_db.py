@@ -235,7 +235,7 @@ def init_qc_result_db():
         conn = get_pnp_connection()
         with conn.cursor() as cur:
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS qc_results (
+            CREATE TABLE IF NOT EXISTS test_qc_results (
                 id BIGSERIAL PRIMARY KEY,
                 episode_id VARCHAR(255) NOT NULL UNIQUE,
                 passed BOOLEAN,
@@ -251,13 +251,13 @@ def init_qc_result_db():
             );
             """)
             cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_qc_results_episode
-            ON qc_results (episode_id);
+            CREATE INDEX IF NOT EXISTS idx_test_qc_results_episode
+            ON test_qc_results (episode_id);
             """)
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS qc_categories (
+            CREATE TABLE IF NOT EXISTS test_qc_categories (
                 id BIGSERIAL PRIMARY KEY,
-                qc_result_id BIGINT REFERENCES qc_results(id) ON DELETE CASCADE,
+                qc_result_id BIGINT REFERENCES test_qc_results(id) ON DELETE CASCADE,
                 category VARCHAR(64),
                 passed BOOLEAN,
                 score DOUBLE PRECISION,
@@ -268,10 +268,10 @@ def init_qc_result_db():
             );
             """)
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS qc_issues (
+            CREATE TABLE IF NOT EXISTS test_qc_issues (
                 id BIGSERIAL PRIMARY KEY,
-                qc_result_id BIGINT REFERENCES qc_results(id) ON DELETE CASCADE,
-                category_id BIGINT REFERENCES qc_categories(id) ON DELETE CASCADE,
+                qc_result_id BIGINT REFERENCES test_qc_results(id) ON DELETE CASCADE,
+                category_id BIGINT REFERENCES test_qc_categories(id) ON DELETE CASCADE,
                 category VARCHAR(64),
                 check_name VARCHAR(256),
                 level VARCHAR(16),
@@ -283,8 +283,8 @@ def init_qc_result_db():
             );
             """)
             cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_qc_issues_result
-            ON qc_issues (qc_result_id);
+            CREATE INDEX IF NOT EXISTS idx_test_qc_issues_result
+            ON test_qc_issues (qc_result_id);
             """)
         conn.commit()
         conn.close()
@@ -355,7 +355,7 @@ def save_qc_results(records: list):
 
                 cur.execute(
                     """
-                    INSERT INTO qc_results (
+                    INSERT INTO test_qc_results (
                         episode_id,
                         passed,
                         overall_score,
@@ -395,7 +395,7 @@ def save_qc_results(records: list):
                 qc_result_id = cur.fetchone()[0]
 
                 cur.execute(
-                    "DELETE FROM qc_categories WHERE qc_result_id = %s",
+                    "DELETE FROM test_qc_categories WHERE qc_result_id = %s",
                     (qc_result_id,),
                 )
 
@@ -407,7 +407,7 @@ def save_qc_results(records: list):
 
                 cur.execute(
                     """
-                    INSERT INTO qc_categories (
+                    INSERT INTO test_qc_categories (
                         qc_result_id,
                         category,
                         passed,
@@ -434,7 +434,7 @@ def save_qc_results(records: list):
                 for issue in result.issues:
                     cur.execute(
                         """
-                        INSERT INTO qc_issues (
+                        INSERT INTO test_qc_issues (
                             qc_result_id,
                             category_id,
                             category,
