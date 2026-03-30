@@ -3,7 +3,7 @@
 from dash import html, dcc
 import dash_bootstrap_components as dbc
 
-from src.validators.base import ValidatorConfig
+from src.acceptance_service.validators.core.base import ValidatorConfig
 
 PNP_DEFAULT_PARAMS = ValidatorConfig().to_pnp_detection_params()
 
@@ -67,6 +67,7 @@ def layout():
                     "sub_title": "截取帧参数",
                     "items": [
                         {"id": "place_end_offset", "label": "Place 截取偏移帧数", "desc": "检测到Place后向后偏置的帧数 (通常>0)"},
+                        {"id": "min_segment_duration_seconds", "label": "最短片段时长(秒)", "desc": "短于该时长的片段不计入统计"},
                     ]
                 }
             ]

@@ -128,6 +128,7 @@ class ValidatorConfig:
     place_velocity_lookahead: int = 0
     place_diff_lookahead: int = 10
     place_end_offset: int = 5
+    min_segment_duration_seconds: float = 0.5
     negative_diff_threshold: float = -0.08
     positive_diff_threshold: float = 0.05
     min_joints_for_diff: int = 2
@@ -137,6 +138,13 @@ class ValidatorConfig:
     count_sigma_k: float = 3.0
     duration_iqr_multiplier: float = 1.5
     axis_sigma_k: float = 3.0
+
+    static_threshold_all: float = 3.0
+    static_threshold_key: float = 5.0
+    static_diff_threshold: float = 0.001
+    max_joint_velocity: float = 10.0
+    min_action_duration: float = 1.0
+    max_nan_ratio: float = 0.01
 
     right_hand_fingers: tuple[str, ...] = (
         "R_pinky_proximal_joint",
@@ -198,6 +206,7 @@ class ValidatorConfig:
             "place_velocity_lookahead": self.place_velocity_lookahead,
             "place_diff_lookahead": self.place_diff_lookahead,
             "place_end_offset": self.place_end_offset,
+            "min_segment_duration_seconds": self.min_segment_duration_seconds,
             "negative_diff_threshold": self.negative_diff_threshold,
             "positive_diff_threshold": self.positive_diff_threshold,
             "min_joints_for_diff": self.min_joints_for_diff,
@@ -213,6 +222,14 @@ class ValidatorConfig:
                 "duration_iqr_multiplier": self.duration_iqr_multiplier,
                 "axis_sigma_k": self.axis_sigma_k,
                 "enable_cross_episode_checks": self.enable_cross_episode_checks,
+            },
+            "action_validation": {
+                "static_threshold_all": self.static_threshold_all,
+                "static_threshold_key": self.static_threshold_key,
+                "static_diff_threshold": self.static_diff_threshold,
+                "max_joint_velocity": self.max_joint_velocity,
+                "min_action_duration": self.min_action_duration,
+                "max_nan_ratio": self.max_nan_ratio,
             },
             "hand_config": {
                 "right": {

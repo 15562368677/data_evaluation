@@ -15,9 +15,8 @@ from src.utils.result_db import (
     query_pnp_df,
     save_qc_results,
 )
-from src.utils.data_parser import load_joint_data
-from src.validators import EEActionValidator, ValidatorConfig
-from src.validators.ee_action_validator import build_task_en
+from src.utils.data_parser import HAND_JOINT_NAMES, JOINT_NAMES, load_joint_data
+from src.acceptance_service.validators import EEActionValidator, ValidatorConfig, build_task_en
 
 
 def load_joint_data_as_dfs(episode_id: str, config: ValidatorConfig):
@@ -35,7 +34,7 @@ def load_joint_data_as_dfs(episode_id: str, config: ValidatorConfig):
     if not parsed_data:
         return None, None
 
-    all_joints = config.get_all_hand_joints()
+    all_joints = list(JOINT_NAMES) + list(HAND_JOINT_NAMES)
     
     # 构建 state_df
     state_df = pd.DataFrame({'timestamp_utc': parsed_data.get('absolute_timestamps_state', [])})
@@ -172,12 +171,16 @@ def _rebuild_batch_qc_results(batch_id: str, task_id: str, validator_config: Val
         if episode_duration is None:
             episode_duration = _estimate_duration_from_segments(right_raw, left_raw)
 
+        state_df, action_df = load_joint_data_as_dfs(episode_id, validator_config)
+
         episode_payloads.append(
             {
                 "episode_id": episode_id,
                 "episode_duration": episode_duration,
                 "right_pnp_result": right_raw,
                 "left_pnp_result": left_raw,
+                "state_df": state_df,
+                "action_df": action_df,
             }
         )
 

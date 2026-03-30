@@ -142,7 +142,7 @@ def query_sampled_episodes(task_ids: list[str], sample_per_task: int, max_total_
     invalid_df = query_pnp_df(
         """
         SELECT DISTINCT episode_id::text AS episode_id
-        FROM duration_results
+        FROM manual_duration_results
         WHERE duration_result = 'invalid'
           AND task_id::text = ANY(%(task_ids)s)
         """,

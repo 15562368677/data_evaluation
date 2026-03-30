@@ -1,5 +1,6 @@
 """统一验证器导出。"""
 
+from .acceptance.action import ActionValidator
 from .acceptance.ee_action import EEActionValidator, build_task_en, extract_minimum_grasp_counts
 from .core.base import (
     BaseValidator,
@@ -10,6 +11,7 @@ from .core.base import (
 )
 
 __all__ = [
+    "ActionValidator",
     "BaseValidator",
     "EEActionValidator",
     "IssueLevel",

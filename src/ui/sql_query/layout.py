@@ -61,7 +61,7 @@ def layout():
                             ),
                             dcc.Textarea(
                                 id="sql-query-input",
-                                placeholder="输入 SQL，例如: SELECT * FROM pnp_results LIMIT 100",
+                                placeholder="输入 SQL，例如: SELECT * FROM manual_pnp_results LIMIT 100",
                                 style={
                                     "width": "100%",
                                     "height": "170px",

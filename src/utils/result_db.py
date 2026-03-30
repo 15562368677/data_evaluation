@@ -6,9 +6,12 @@ import psycopg2
 from psycopg2.extras import Json
 from dotenv import load_dotenv
 
-from src.validators.base import IssueLevel, ValidationResult
+from src.acceptance_service.validators.core.base import IssueLevel, ValidationResult
 
 load_dotenv()
+
+MANUAL_DURATION_RESULTS_TABLE = "manual_duration_results"
+MANUAL_PNP_RESULTS_TABLE = "manual_pnp_results"
 
 def get_pnp_connection():
     """获取pnp_result数据库连接"""
@@ -95,13 +98,13 @@ def init_pnp_db():
 
 
 def init_duration_result_db():
-    """初始化 duration_results 表"""
+    """初始化 manual_duration_results 表"""
     import logging
     try:
         conn = get_pnp_connection()
         with conn.cursor() as cur:
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS duration_results (
+            CREATE TABLE IF NOT EXISTS manual_duration_results (
                 id SERIAL PRIMARY KEY,
                 episode_id VARCHAR(255) NOT NULL,
                 task_id VARCHAR(255),
@@ -113,11 +116,11 @@ def init_duration_result_db():
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Failed to initialize duration_results table: {e}")
+        logging.error(f"Failed to initialize {MANUAL_DURATION_RESULTS_TABLE} table: {e}")
 
 
 def save_duration_results(records: list):
-    """批量保存 duration 检测结果到 duration_results 表。
+    """批量保存 duration 检测结果到 manual_duration_results 表。
 
     每条 record 结构: {"episode_id": str, "task_id": str, "label": str}
     label 取值: "pass" / "fast" / "slow" / "invalid"
@@ -135,7 +138,7 @@ def save_duration_results(records: list):
                 label = rec.get("label", "")
                 
                 cur.execute("""
-                    INSERT INTO duration_results (episode_id, task_id, duration_result)
+                    INSERT INTO manual_duration_results (episode_id, task_id, duration_result)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (episode_id) DO UPDATE SET
                         task_id = EXCLUDED.task_id,
@@ -167,7 +170,7 @@ def query_checked_episodes(episode_ids: list):
             placeholders = ",".join(["%s"] * len(episode_ids))
             cur.execute(
                 f"SELECT episode_id, duration_result "
-                f"FROM duration_results WHERE episode_id IN ({placeholders})",
+                f"FROM {MANUAL_DURATION_RESULTS_TABLE} WHERE episode_id IN ({placeholders})",
                 [str(eid) for eid in episode_ids],
             )
             rows = cur.fetchall()
@@ -183,7 +186,7 @@ def query_checked_episodes(episode_ids: list):
 
 
 def delete_duration_results(episode_ids: list):
-    """按 episode_id 列表删除 duration_results 记录，返回删除条数。"""
+    """按 episode_id 列表删除 manual_duration_results 记录，返回删除条数。"""
     if not episode_ids:
         return 0
 
@@ -193,7 +196,7 @@ def delete_duration_results(episode_ids: list):
         with conn.cursor() as cur:
             placeholders = ",".join(["%s"] * len(episode_ids))
             cur.execute(
-                f"DELETE FROM duration_results WHERE episode_id IN ({placeholders})",
+                f"DELETE FROM {MANUAL_DURATION_RESULTS_TABLE} WHERE episode_id IN ({placeholders})",
                 [str(eid) for eid in episode_ids],
             )
             deleted = cur.rowcount or 0
@@ -206,13 +209,13 @@ def delete_duration_results(episode_ids: list):
     return deleted
 
 def init_pnp_result_db():
-    """初始化 pnp_results 表"""
+    """初始化 manual_pnp_results 表"""
     import logging
     try:
         conn = get_pnp_connection()
         with conn.cursor() as cur:
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS pnp_results (
+            CREATE TABLE IF NOT EXISTS manual_pnp_results (
                 id SERIAL PRIMARY KEY,
                 episode_id VARCHAR(255) NOT NULL,
                 task_id VARCHAR(255),
@@ -224,7 +227,7 @@ def init_pnp_result_db():
         conn.commit()
         conn.close()
     except Exception as e:
-        logging.error(f"Failed to initialize pnp_results table: {e}")
+        logging.error(f"Failed to initialize {MANUAL_PNP_RESULTS_TABLE} table: {e}")
 
 
 def init_qc_result_db():
@@ -292,7 +295,7 @@ def init_qc_result_db():
         logging.error(f"Failed to initialize qc result tables: {e}")
 
 def save_pnp_results(records: list):
-    """批量保存 pnp 检测结果到 pnp_results 表。
+    """批量保存 pnp 检测结果到 manual_pnp_results 表。
 
     每条 record 结构: {"episode_id": str, "task_id": str, "label": str}
     label 取值: "pass" / "multi_pick" / "fail_pick" / "invalid"
@@ -310,7 +313,7 @@ def save_pnp_results(records: list):
                 label = rec.get("label", "")
                 
                 cur.execute("""
-                    INSERT INTO pnp_results (episode_id, task_id, pnp_result)
+                    INSERT INTO manual_pnp_results (episode_id, task_id, pnp_result)
                     VALUES (%s, %s, %s)
                     ON CONFLICT (episode_id) DO UPDATE SET
                         task_id = EXCLUDED.task_id,
@@ -345,11 +348,11 @@ def save_qc_results(records: list):
                 raw_json = result.to_dict()
                 category_summary = result.get_category_summary()
                 has_major_issue = any(
-                    issue.level == IssueLevel.MAJOR
+                    issue.level == IssueLevel.MAJOR and not issue.passed
                     for issue in result.issues
                 )
                 has_blocker_issue = any(
-                    issue.level == IssueLevel.CRITICAL
+                    issue.level == IssueLevel.CRITICAL and not issue.passed
                     for issue in result.issues
                 )
 
@@ -398,38 +401,60 @@ def save_qc_results(records: list):
                     "DELETE FROM test_qc_categories WHERE qc_result_id = %s",
                     (qc_result_id,),
                 )
-
-                category_name = None
-                if result.issues:
-                    category_name = result.issues[0].category
-                elif result.details:
-                    category_name = str(result.details.get("category", ""))
-
                 cur.execute(
-                    """
-                    INSERT INTO test_qc_categories (
-                        qc_result_id,
-                        category,
-                        passed,
-                        score,
-                        passed_count,
-                        failed_count,
-                        details
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        qc_result_id,
-                        category_name,
-                        result.passed,
-                        result.score,
-                        result.passed_count,
-                        result.failed_count,
-                        Json(result.details),
-                    ),
+                    "DELETE FROM test_qc_issues WHERE qc_result_id = %s",
+                    (qc_result_id,),
                 )
-                category_id = cur.fetchone()[0]
+
+                category_results = result.details.get("category_results", {}) if result.details else {}
+                category_issue_map = {}
+                for issue in result.issues:
+                    category_issue_map.setdefault(issue.category, []).append(issue)
+
+                if not category_issue_map:
+                    fallback_category = str((result.details or {}).get("category", "") or "default")
+                    category_issue_map[fallback_category] = []
+
+                category_ids = {}
+                for category_name, category_issues in category_issue_map.items():
+                    category_passed = all(
+                        issue.passed
+                        for issue in category_issues
+                        if issue.level in (IssueLevel.CRITICAL, IssueLevel.MAJOR)
+                    )
+                    category_passed_count = sum(1 for issue in category_issues if issue.passed)
+                    category_failed_count = sum(1 for issue in category_issues if not issue.passed)
+                    category_score = (
+                        round(category_passed_count / len(category_issues) * 100.0, 1)
+                        if category_issues
+                        else None
+                    )
+
+                    cur.execute(
+                        """
+                        INSERT INTO test_qc_categories (
+                            qc_result_id,
+                            category,
+                            passed,
+                            score,
+                            passed_count,
+                            failed_count,
+                            details
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            qc_result_id,
+                            category_name,
+                            category_passed,
+                            category_score,
+                            category_passed_count,
+                            category_failed_count,
+                            Json(category_results.get(category_name, {})),
+                        ),
+                    )
+                    category_ids[category_name] = cur.fetchone()[0]
 
                 for issue in result.issues:
                     cur.execute(
@@ -449,7 +474,7 @@ def save_qc_results(records: list):
                         """,
                         (
                             qc_result_id,
-                            category_id,
+                            category_ids.get(issue.category),
                             issue.category,
                             issue.check_name,
                             issue.level.value,
@@ -483,7 +508,7 @@ def query_checked_pnp_episodes(episode_ids: list):
             placeholders = ",".join(["%s"] * len(episode_ids))
             cur.execute(
                 f"SELECT episode_id, pnp_result "
-                f"FROM pnp_results WHERE episode_id IN ({placeholders})",
+                f"FROM {MANUAL_PNP_RESULTS_TABLE} WHERE episode_id IN ({placeholders})",
                 [str(eid) for eid in episode_ids],
             )
             rows = cur.fetchall()

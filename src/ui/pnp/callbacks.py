@@ -12,7 +12,7 @@ from src.utils.data_parser import (
     get_video_url,
     load_joint_data,
 )
-from src.validators.base import ValidatorConfig
+from src.acceptance_service.validators.core.base import ValidatorConfig
 
 
 def register_callbacks(app):
@@ -244,7 +244,7 @@ def register_callbacks(app):
                 invalid_df = query_pnp_df(
                     """
                     SELECT COUNT(DISTINCT episode_id) AS invalid_count
-                    FROM duration_results
+                    FROM manual_duration_results
                     WHERE task_id = %(task_id)s
                       AND duration_result = 'invalid'
                     """,

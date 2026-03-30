@@ -55,6 +55,25 @@ def _calc_total_duration(segments: Iterable[Iterable[float]]) -> float:
     return sum(max(0.0, float(end_sec) - float(start_sec)) for start_sec, end_sec in segments)
 
 
+def _filter_short_segments(
+    segments: Iterable[Iterable[float]],
+    min_duration_seconds: float,
+) -> List[List[float]]:
+    filtered: List[List[float]] = []
+    threshold = max(0.0, float(min_duration_seconds))
+    for segment in segments:
+        if not isinstance(segment, (list, tuple)) or len(segment) < 2:
+            continue
+        start_sec = float(segment[0])
+        end_sec = float(segment[1])
+        if end_sec < start_sec:
+            start_sec, end_sec = end_sec, start_sec
+        if (end_sec - start_sec) < threshold:
+            continue
+        filtered.append([start_sec, end_sec])
+    return filtered
+
+
 def _calc_axis_ratios(
     segments: Iterable[Iterable[float]],
     episode_duration: Optional[float],
@@ -520,16 +539,20 @@ class EEActionValidator(BaseValidator):
         segments: List[List[float]],
         episode_duration: Optional[float],
     ) -> Dict[str, Any]:
+        filtered_segments = _filter_short_segments(
+            segments,
+            self.config.min_segment_duration_seconds,
+        )
         duration_ratio = None
         if episode_duration is not None and episode_duration > 0:
-            duration_ratio = _calc_total_duration(segments) / float(episode_duration)
-        axis_points = _calc_axis_ratios(segments, episode_duration)
+            duration_ratio = _calc_total_duration(filtered_segments) / float(episode_duration)
+        axis_points = _calc_axis_ratios(filtered_segments, episode_duration)
         axis_score = sum(axis_points) / len(axis_points) if axis_points else 0.0
 
         return {
             "hand": hand,
-            "segments": segments,
-            "count": len(segments),
+            "segments": filtered_segments,
+            "count": len(filtered_segments),
             "duration_ratio": duration_ratio,
             "axis_points": axis_points,
             "axis_score": axis_score,

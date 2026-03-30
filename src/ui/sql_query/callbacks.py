@@ -24,6 +24,36 @@ def _quote_ident(name):
     return ".".join('"' + p.replace('"', '""') + '"' for p in parts)
 
 
+def _split_schema_table(name):
+    parts = [p for p in str(name).split(".") if p]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return "public", str(name).strip()
+
+
+def _default_sql_for_table(name):
+    schema_name, table_name = _split_schema_table(name)
+    order_clause = ""
+    try:
+        column_df = query_pnp_df(
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = %s
+              AND table_name = %s
+              AND column_name = 'created_at'
+            LIMIT 1
+            """,
+            (schema_name, table_name),
+        )
+        if not column_df.empty:
+            order_clause = " ORDER BY created_at DESC"
+    except Exception:
+        order_clause = ""
+
+    return f"SELECT * FROM {_quote_ident(name)}{order_clause} LIMIT 100"
+
+
 def _placeholder(text):
     return html.Div(
         text,
@@ -199,7 +229,7 @@ def register_callbacks(app):
                     _placeholder("SQL 未执行。"),
                     raw_sql,
                 )
-            sql = f"SELECT * FROM {_quote_ident(table_name)} LIMIT 100"
+            sql = _default_sql_for_table(table_name)
         elif trigger == "sql-query-run-btn":
             if not run_clicks:
                 return (

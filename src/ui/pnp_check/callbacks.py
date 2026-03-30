@@ -1485,7 +1485,7 @@ def register_callbacks(app):
             
         try:
             count = save_pnp_results(records)
-            return html.Div(f"成功保存 {count} 条数据到 pnp_results!", style={"color": "#10b981", "fontWeight": "bold"}), {"pass": [], "multi_pick": [], "fail_pick": [], "invalid": []}
+            return html.Div(f"成功保存 {count} 条数据到 manual_pnp_results!", style={"color": "#10b981", "fontWeight": "bold"}), {"pass": [], "multi_pick": [], "fail_pick": [], "invalid": []}
         except Exception as e:
             return html.Div(f"保存失败: {e}", style={"color": "red"}), no_update
 

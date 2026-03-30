@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pandas as pd
 
 from .validators import (
+    ActionValidator,
     EEActionValidator,
     IssueLevel,
     ValidationResult,
@@ -146,7 +147,9 @@ class AcceptanceService:
 
     def __init__(self, config: Optional[ValidatorConfig] = None):
         self.config = config or ValidatorConfig()
-        self.validator = EEActionValidator(self.config)
+        self.ee_validator = EEActionValidator(self.config)
+        self.action_validator = ActionValidator(self.config)
+        self.validator = self.ee_validator
 
     def build_task_context(
         self,
@@ -203,7 +206,7 @@ class AcceptanceService:
         existing_result = payload.get("validation_result")
         if isinstance(existing_result, ValidationResult):
             return existing_result
-        return self.validator.validate(episode_id, payload)
+        return self.ee_validator.validate(episode_id, payload)
 
     def _evaluate_hand(
         self,
@@ -327,7 +330,7 @@ class AcceptanceService:
 
         details = {
             **detection_details,
-            "validator_name": self.validator.name,
+            "validator_name": self.ee_validator.name,
             "check_name": "抓取检测",
             "issue_level": issue_level.value,
             "minimum_required_grasps": effective_task_context.get("minimum_required_grasps", {}),
@@ -346,7 +349,7 @@ class AcceptanceService:
             "hands": hand_results,
         }
 
-        issue = self.validator._create_issue(
+        issue = self.ee_validator._create_issue(
             check_name="抓取检测",
             message=LEVEL_MESSAGES[issue_level],
             passed=issue_passed,
@@ -354,11 +357,39 @@ class AcceptanceService:
             value=issue_value,
             threshold=issue_threshold,
         )
-        return ValidationResult(
+        ee_result = ValidationResult(
             passed=issue_passed,
             score=None,
             issues=[issue],
             details=details,
+        )
+        action_result = self.action_validator.validate(episode_id, payload)
+
+        combined_issues = ee_result.issues + action_result.issues
+        combined_passed = all(
+            item.passed
+            for item in combined_issues
+            if item.level in (IssueLevel.CRITICAL, IssueLevel.MAJOR)
+        )
+        combined_score = (
+            round(sum(1 for item in combined_issues if item.passed) / len(combined_issues) * 100.0, 1)
+            if combined_issues
+            else None
+        )
+
+        return ValidationResult(
+            passed=combined_passed,
+            score=combined_score,
+            issues=combined_issues,
+            details={
+                **details,
+                "validator_name": "统一质检",
+                "check_name": "统一质检",
+                "category_results": {
+                    self.ee_validator.category: ee_result.details,
+                    self.action_validator.category: action_result.details,
+                },
+            },
         )
 
     def validate_batch(
@@ -411,7 +442,7 @@ class AcceptanceService:
         hands = details.get("hands") or {}
         return {
             "validator_name": details.get("validator_name"),
-            "category": self.validator.category,
+            "category": self.ee_validator.category,
             "check_name": details.get("check_name"),
             "passed": bool(result.passed),
             "issue_level": details.get("issue_level"),
