@@ -84,6 +84,67 @@ def _classify_outlier(
     return "normal"
 
 
+def _build_compact_hand_details(hand_details: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "count": hand_details.get("count", 0),
+        "level": hand_details.get("level"),
+        "reason": hand_details.get("reason"),
+        "message": hand_details.get("message"),
+        "axis_tag": hand_details.get("axis_tag"),
+        "axis_score": hand_details.get("axis_score", 0.0),
+        "duration_tag": hand_details.get("duration_tag"),
+        "duration_ratio": hand_details.get("duration_ratio"),
+        "segments": hand_details.get("segments", []),
+        "minimum_required_count": hand_details.get("minimum_required_count", 0),
+        "count_mean": hand_details.get("count_mean"),
+        "count_std": hand_details.get("count_std"),
+        "count_upper_bound": hand_details.get("count_upper_bound"),
+        "count_sigma_multiplier": hand_details.get("count_sigma_multiplier"),
+    }
+
+
+def _build_compact_ee_details(
+    hand_results: Dict[str, Dict[str, Any]],
+    issue_level: str,
+    task_description_en: str,
+    episode_duration: Optional[float],
+    minimum_required_grasps: Dict[str, int],
+    validator_name: str,
+    check_name: str,
+) -> Dict[str, Any]:
+    return {
+        "validator_name": validator_name,
+        "check_name": check_name,
+        "issue_level": issue_level,
+        "task_description_en": task_description_en,
+        "episode_duration": episode_duration,
+        "minimum_required_grasps": minimum_required_grasps,
+        "hands": {
+            hand: _build_compact_hand_details(hand_results.get(hand) or {})
+            for hand in HAND_KEYS
+        },
+    }
+
+
+def _build_compact_action_details(details: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "validator_name": details.get("validator_name"),
+        "category": details.get("category"),
+        "check_name": details.get("check_name"),
+        "frame_count": details.get("frame_count"),
+        "joint_count": details.get("joint_count"),
+        "format": details.get("format"),
+        "fps": details.get("fps"),
+        "all_static_duration": details.get("all_static_duration"),
+        "key_static_duration": details.get("key_static_duration"),
+        "max_velocity": details.get("max_velocity"),
+        "unsafe_joint_count": details.get("unsafe_joint_count"),
+        "duration": details.get("duration"),
+        "nan_count": details.get("nan_count"),
+        "nan_ratio": details.get("nan_ratio"),
+    }
+
+
 def _student_t_sigma_multiplier(sample_size: int, sigma_k: float) -> Optional[float]:
     if sample_size <= 1 or sigma_k <= 0:
         return None
@@ -328,26 +389,20 @@ class AcceptanceService:
                 if thresholds:
                     issue_threshold = max(thresholds)
 
-        details = {
-            **detection_details,
-            "validator_name": self.ee_validator.name,
-            "check_name": "抓取检测",
-            "issue_level": issue_level.value,
-            "minimum_required_grasps": effective_task_context.get("minimum_required_grasps", {}),
-            "right_pnp_result": hand_results["right"].get("segments", []),
-            "left_pnp_result": hand_results["left"].get("segments", []),
-            "r_count": hand_results["right"].get("count", 0),
-            "l_count": hand_results["left"].get("count", 0),
-            "r_duration": hand_results["right"].get("duration_ratio"),
-            "l_duration": hand_results["left"].get("duration_ratio"),
-            "r_duration_tag": hand_results["right"].get("duration_tag"),
-            "l_duration_tag": hand_results["left"].get("duration_tag"),
-            "r_axis_score": hand_results["right"].get("axis_score", 0.0),
-            "l_axis_score": hand_results["left"].get("axis_score", 0.0),
-            "r_axis_tag": hand_results["right"].get("axis_tag"),
-            "l_axis_tag": hand_results["left"].get("axis_tag"),
-            "hands": hand_results,
-        }
+        task_description_en = effective_task_context.get(
+            "task_description_en",
+            detection_details.get("task_description_en", "Unknown task"),
+        )
+        minimum_required_grasps = effective_task_context.get("minimum_required_grasps", {})
+        details = _build_compact_ee_details(
+            hand_results=hand_results,
+            issue_level=issue_level.value,
+            task_description_en=task_description_en,
+            episode_duration=detection_details.get("episode_duration"),
+            minimum_required_grasps=minimum_required_grasps,
+            validator_name=self.ee_validator.name,
+            check_name="抓取检测",
+        )
 
         issue = self.ee_validator._create_issue(
             check_name="抓取检测",
@@ -386,8 +441,8 @@ class AcceptanceService:
                 "validator_name": "统一质检",
                 "check_name": "统一质检",
                 "category_results": {
-                    self.ee_validator.category: ee_result.details,
-                    self.action_validator.category: action_result.details,
+                    self.ee_validator.category: details,
+                    self.action_validator.category: _build_compact_action_details(action_result.details),
                 },
             },
         )
@@ -440,21 +495,23 @@ class AcceptanceService:
     def build_stream_summary(self, result: ValidationResult) -> Dict[str, Any]:
         details = result.details or {}
         hands = details.get("hands") or {}
+        right = hands.get("right") or {}
+        left = hands.get("left") or {}
         return {
             "validator_name": details.get("validator_name"),
             "category": self.ee_validator.category,
             "check_name": details.get("check_name"),
             "passed": bool(result.passed),
             "issue_level": details.get("issue_level"),
-            "r_count": details.get("r_count"),
-            "l_count": details.get("l_count"),
-            "r_duration_tag": details.get("r_duration_tag"),
-            "l_duration_tag": details.get("l_duration_tag"),
-            "r_axis_tag": details.get("r_axis_tag"),
-            "l_axis_tag": details.get("l_axis_tag"),
+            "r_count": right.get("count"),
+            "l_count": left.get("count"),
+            "r_duration_tag": right.get("duration_tag"),
+            "l_duration_tag": left.get("duration_tag"),
+            "r_axis_tag": right.get("axis_tag"),
+            "l_axis_tag": left.get("axis_tag"),
             "minimum_required_grasps": details.get("minimum_required_grasps"),
             "hand_levels": {
-                "right": (hands.get("right") or {}).get("level"),
-                "left": (hands.get("left") or {}).get("level"),
+                "right": right.get("level"),
+                "left": left.get("level"),
             },
         }

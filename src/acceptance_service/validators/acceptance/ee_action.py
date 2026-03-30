@@ -463,7 +463,8 @@ class EEActionValidator(BaseValidator):
         action_df: pd.DataFrame,
         hand: str,
     ) -> List[List[float]]:
-        hand_config = self.config.get_hand_detection_config(hand)
+        hand_name = str(hand).lower()
+        hand_config = self.config.get_hand_detection_config(hand_name)
         sorted_state_df = state_df.sort_values("timestamp_utc")
         sorted_action_df = action_df.sort_values("timestamp_utc")
         closure_df = calculate_closure_metrics_from_dataframe(

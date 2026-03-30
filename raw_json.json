@@ -1,58 +1,66 @@
-{"hands": 
-    {"left": 
-        {"hand": 
-        "left", "count": 0, 
-        "level": "info", 
-        "reason": "normal", 
-        "message": "抓取行为正常", 
-        "axis_tag": "none", 
-        "segments": [], 
-        "count_std": 0.0, 
-        "axis_score": 0.0, 
-        "count_mean": 0.0, 
-        "axis_points": [], 
-        "duration_tag": "none",
-        "duration_ratio": 0.0, 
-        "count_upper_bound": null, 
-        "count_sigma_multiplier": null,
-        "minimum_required_count": 0
-        }, 
-    "right": {
-        "hand": "right", 
-        "count": 1, 
+{
+"passed": true,
+"score": null,
+"passed_count": 1,
+"failed_count": 0,
+"issues": [
+    {
+    "level": "info",
+    "check_name": "抓取检测",
+    "category": "末端轨迹",
+    "message": "抓取行为正常",
+    "value": null,
+    "threshold": null,
+    "passed": true
+    }
+],
+"category_summary": {
+    "末端轨迹": {
+    "passed": 1,
+    "failed": 0
+    }
+},
+"details": {
+    "issue_level": "info",
+    "task_description_en": "Unknown task",
+    "episode_duration": 9.360262912,
+    "minimum_required_grasps": {
+    "left": 0,
+    "right": 1
+    },
+    "hands": {
+    "left": {
+        "count": 0,
         "level": "info",
-        "reason": "normal", 
-        "message": "抓取行为正常", 
-        "axis_tag": "normal", 
-        "segments": [[3.983775, 7.232]], 
-        "count_std": 0.060858061945018485, 
-        "axis_score": 0.5991164513990951, 
-        "count_mean": 1.0037037037037038, 
-        "axis_points": [0.5991164513990951], 
-        "duration_tag": "normal", 
-        "duration_ratio": 0.34702283798414746, 
-        "count_upper_bound": 1.1862778895387591, 
-        "count_sigma_multiplier": 3.0, 
-        "minimum_required_count": 1
-            }
-    }, 
-"l_count": 0, 
-"r_count": 1, 
-"category": "末端轨迹", 
-"check_name": "抓取检测", 
-"l_axis_tag": "none", 
-"l_duration": 0.0,
-"r_axis_tag": "normal", 
-"r_duration": 0.34702283798414746, 
-"issue_level": "info", 
-"l_axis_score": 0.0, 
-"r_axis_score": 0.5991164513990951, 
-"l_duration_tag": "none", 
-"r_duration_tag": "normal", 
-"validator_name": "末端执行器动作验证器", 
-"left_pnp_result": [], 
-"episode_duration": 9.360262912, 
-"right_pnp_result": [[3.983775, 7.232]], 
-"task_description_en": "Unknown task", 
-"minimum_required_grasps": {"left": 0, "right": 1}
+        "reason": "normal",
+        "message": "抓取行为正常",
+        "axis_tag": "none",
+        "axis_score": 0.0,
+        "duration_tag": "none",
+        "duration_ratio": 0.0,
+        "segments": [],
+        "minimum_required_count": 0,
+        "count_mean": 0.0,
+        "count_std": 0.0,
+        "count_upper_bound": null,
+        "count_sigma_multiplier": null
+    },
+    "right": {
+        "count": 1,
+        "level": "info",
+        "reason": "normal",
+        "message": "抓取行为正常",
+        "axis_tag": "normal",
+        "axis_score": 0.5991164513990951,
+        "duration_tag": "normal",
+        "duration_ratio": 0.34702283798414746,
+        "segments": [[3.983775, 7.232]],
+        "minimum_required_count": 1,
+        "count_mean": 1.0037037037037038,
+        "count_std": 0.060858061945018485,
+        "count_upper_bound": 1.1862778895387591,
+        "count_sigma_multiplier": 3.0
+    }
+    }
+}
 }

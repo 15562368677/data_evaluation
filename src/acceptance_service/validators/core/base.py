@@ -116,81 +116,147 @@ def _default_left_joint_direction_coefficients() -> Dict[str, float]:
     }
 
 
+def _default_hand_config() -> Dict[str, Dict[str, Any]]:
+    return {
+        "right": {
+            "finger_joints": [
+                "R_pinky_proximal_joint",
+                "R_ring_proximal_joint",
+                "R_middle_proximal_joint",
+                "R_index_proximal_joint",
+                "R_thumb_proximal_pitch_joint",
+            ],
+            "joint_direction_coefficients": _default_right_joint_direction_coefficients(),
+        },
+        "left": {
+            "finger_joints": [
+                "L_pinky_proximal_joint",
+                "L_ring_proximal_joint",
+                "L_middle_proximal_joint",
+                "L_index_proximal_joint",
+                "L_thumb_proximal_pitch_joint",
+            ],
+            "joint_direction_coefficients": _default_left_joint_direction_coefficients(),
+        },
+    }
+
+
 @dataclass
 class ValidatorConfig:
-    """验证器配置。"""
+    """
+    验证器配置（严格按照 criterion.md）
 
-    pick_closure_threshold: float = 0.35
-    pick_start_offset: int = -5
-    place_closure_threshold: float = 0.35
-    place_velocity_threshold: float = -0.02
-    place_velocity_lookback: int = 5
-    place_velocity_lookahead: int = 0
-    place_diff_lookahead: int = 10
-    place_end_offset: int = 5
-    min_segment_duration_seconds: float = 0.5
-    negative_diff_threshold: float = -0.08
-    positive_diff_threshold: float = 0.05
-    min_joints_for_diff: int = 2
-    slope_threshold: float = 0.0005
-    slope_lookahead: int = 10
+    所有阈值可通过前端 UI 动态配置
+    """
 
-    count_sigma_k: float = 3.0
-    duration_iqr_multiplier: float = 1.5
-    axis_sigma_k: float = 3.0
+    # ========== PnP 检测参数 ==========
+    pick_closure_threshold: float = 0.35      # 抓取闭合阈值：手指闭合度超过该值视为 pick 开始
+    pick_start_offset: int = -5               # 抓取起点回看帧数：在闭合触发点前额外回溯的帧数
+    place_closure_threshold: float = 0.35     # 放置闭合阈值：用于判定 place 阶段手部仍处于抓持状态
+    place_velocity_threshold: float = -0.02   # 放置速度阈值：手部张开速度低于该值视为释放信号
+    place_velocity_lookback: int = 5          # 放置速度回看窗口：计算释放速度时向前参考的帧数
+    place_velocity_lookahead: int = 0         # 放置速度前看窗口：计算释放速度时向后参考的帧数
+    place_diff_lookahead: int = 10            # 放置差分前看窗口：检测放置趋势时向后比较的帧数
+    place_end_offset: int = 5                 # 放置终点补偿帧数：在检测到 place 后向后扩展的帧数
+    min_segment_duration_seconds: float = 0.5 # 最短有效片段时长：低于该时长的 PnP 片段会被过滤
+    negative_diff_threshold: float = -0.08    # 负向差分阈值：用于识别放置/松手阶段的下降变化
+    positive_diff_threshold: float = 0.05     # 正向差分阈值：用于识别抓取/闭合阶段的上升变化
+    min_joints_for_diff: int = 2              # 最少有效关节数：参与差分判断的最小关节数量
+    slope_threshold: float = 0.0005           # 斜率阈值：用于判断动作趋势是否足够明显
+    slope_lookahead: int = 10                 # 斜率前看窗口：计算趋势斜率时使用的后续帧数
+    count_sigma_k: float = 3.0                # 抓取次数异常阈值系数：跨 episode 次数上界的 sigma 倍数
+    duration_iqr_multiplier: float = 1.5      # 抓取时长异常系数：基于 IQR 的时长离群判定倍数
+    axis_sigma_k: float = 3.0                 # 抓取时机异常阈值系数：时间轴位置离群判定的 sigma 倍数
+    hand_config: Dict[str, Dict[str, Any]] = field(default_factory=_default_hand_config)  # 手部关节配置：左右手检测所需关节名与方向系数
 
+    # ========== 4.1 视觉数据质量 ==========
+    min_resolution_width: int = 640
+    min_resolution_height: int = 480
+    min_frame_rate: float = 20.0
+    recommended_frame_rate: float = 30.0
+    frame_rate_tolerance: float = 2.0
+    color_shift_max: float = 0.10
+    white_balance_min: float = 0.95
+    overexposure_ratio_max: float = 0.05
+    underexposure_ratio_max: float = 0.10
+    abnormal_black_ratio_max: float = 0.95
+    abnormal_white_ratio_max: float = 0.95
+
+    # ========== 4.2 深度数据质量 ==========
+    depth_precision_cm: float = 2.0
+    depth_error_max: float = 0.02
+    depth_invalid_pixel_max: float = 0.10
+    depth_continuity_min: float = 0.90
+
+    # ========== 4.3 语言指令质量 ==========
+    instruction_min_words: int = 3
+    instruction_max_words: int = 50
+    instruction_avg_min: int = 8
+    instruction_avg_max: int = 20
+    instruction_ambiguity_threshold: float = 0.95
+
+    # ========== 4.4 动作数据质量 ==========
+    min_sampling_rate: float = 60.0
+    recommended_sampling_rate: float = 60.0
+    sampling_rate_tolerance: float = 0.05
     static_threshold_all: float = 3.0
     static_threshold_key: float = 5.0
+    static_ratio_max: float = 0.01
     static_diff_threshold: float = 0.001
-    max_joint_velocity: float = 10.0
+    data_interrupt_max: float = 1.0
+    max_joint_velocity: float = 3.14
+    grasp_threshold: float = 0.5
+    machine_id: str = "gr3"
     min_action_duration: float = 1.0
     max_nan_ratio: float = 0.01
 
-    right_hand_fingers: tuple[str, ...] = (
-        "R_pinky_proximal_joint",
-        "R_ring_proximal_joint",
-        "R_middle_proximal_joint",
-        "R_index_proximal_joint",
-        "R_thumb_proximal_pitch_joint",
-    )
-    left_hand_fingers: tuple[str, ...] = (
-        "L_pinky_proximal_joint",
-        "L_ring_proximal_joint",
-        "L_middle_proximal_joint",
-        "L_index_proximal_joint",
-        "L_thumb_proximal_pitch_joint",
-    )
-    right_joint_direction_coefficients: Dict[str, float] = field(
-        default_factory=_default_right_joint_direction_coefficients
-    )
-    left_joint_direction_coefficients: Dict[str, float] = field(
-        default_factory=_default_left_joint_direction_coefficients
-    )
+    # ========== 4.5 时间同步质量 ==========
+    timestamp_monotonic_min: float = 0.99
+    timestamp_gap_tolerance: float = 0.10
+    timestamp_stability_min: float = 0.90
+    frequency_tolerance: float = 0.10
+    frequency_consistency_min: float = 0.90
 
+    # ========== 5. 分层质检 ==========
+    single_data_pass_rate: float = 0.98
+    invalid_multimodal_max: float = 0.02
+    invalid_atomic_skill_max: float = 0.02
+    smoothness_threshold: float = 0.05
+
+    # ========== 4.6 时长过滤 ==========
+    duration_min: Optional[float] = None
+    duration_max: Optional[float] = None
+    duration_percentile_min: Optional[int] = None
+    duration_percentile_max: Optional[int] = None
+
+    # ========== 运行时开关 ==========
     enable_cross_episode_checks: bool = True
 
     def get_hand_fingers(self, hand: str) -> List[str]:
         hand_name = str(hand).lower()
-        if hand_name == "right":
-            return list(self.right_hand_fingers)
-        if hand_name == "left":
-            return list(self.left_hand_fingers)
+        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
+        finger_joints = hand_details.get("finger_joints")
+        if isinstance(finger_joints, list):
+            return list(finger_joints)
         raise ValueError(f"Unsupported hand: {hand}")
 
     def get_hand_direction_coefficients(self, hand: str) -> Dict[str, float]:
         hand_name = str(hand).lower()
-        if hand_name == "right":
-            return dict(self.right_joint_direction_coefficients)
-        if hand_name == "left":
-            return dict(self.left_joint_direction_coefficients)
+        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
+        direction_coefficients = hand_details.get("joint_direction_coefficients")
+        if isinstance(direction_coefficients, dict):
+            return dict(direction_coefficients)
         raise ValueError(f"Unsupported hand: {hand}")
 
     def get_hand_detection_config(self, hand: str) -> Dict[str, Any]:
+        hand_name = str(hand).lower()
+        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
+        if not hand_details:
+            raise ValueError(f"Unsupported hand: {hand}")
         return {
             **self.to_pnp_detection_params(),
-            "hand": str(hand).lower(),
-            "finger_joints": self.get_hand_fingers(hand),
-            "joint_direction_coefficients": self.get_hand_direction_coefficients(hand),
+            "hand": hand_name,
+            **hand_details,
         }
 
     def get_all_hand_joints(self) -> List[str]:
@@ -212,34 +278,79 @@ class ValidatorConfig:
             "min_joints_for_diff": self.min_joints_for_diff,
             "slope_threshold": self.slope_threshold,
             "slope_lookahead": self.slope_lookahead,
+            "hand_config": self.hand_config,
         }
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "visual": {
+                "min_resolution_width": self.min_resolution_width,
+                "min_resolution_height": self.min_resolution_height,
+                "min_frame_rate": self.min_frame_rate,
+                "recommended_frame_rate": self.recommended_frame_rate,
+                "frame_rate_tolerance": self.frame_rate_tolerance,
+                "color_shift_max": self.color_shift_max,
+                "white_balance_min": self.white_balance_min,
+                "overexposure_ratio_max": self.overexposure_ratio_max,
+                "underexposure_ratio_max": self.underexposure_ratio_max,
+                "abnormal_black_ratio_max": self.abnormal_black_ratio_max,
+                "abnormal_white_ratio_max": self.abnormal_white_ratio_max,
+            },
+            "depth": {
+                "depth_precision_cm": self.depth_precision_cm,
+                "depth_error_max": self.depth_error_max,
+                "depth_invalid_pixel_max": self.depth_invalid_pixel_max,
+                "depth_continuity_min": self.depth_continuity_min,
+            },
+            "language": {
+                "instruction_min_words": self.instruction_min_words,
+                "instruction_max_words": self.instruction_max_words,
+                "instruction_avg_min": self.instruction_avg_min,
+                "instruction_avg_max": self.instruction_avg_max,
+                "instruction_ambiguity_threshold": self.instruction_ambiguity_threshold,
+            },
             "pnp_detection": self.to_pnp_detection_params(),
             "ee_validation": {
                 "count_sigma_k": self.count_sigma_k,
                 "duration_iqr_multiplier": self.duration_iqr_multiplier,
                 "axis_sigma_k": self.axis_sigma_k,
-                "enable_cross_episode_checks": self.enable_cross_episode_checks,
             },
-            "action_validation": {
+            "action": {
+                "min_sampling_rate": self.min_sampling_rate,
+                "recommended_sampling_rate": self.recommended_sampling_rate,
+                "sampling_rate_tolerance": self.sampling_rate_tolerance,
                 "static_threshold_all": self.static_threshold_all,
                 "static_threshold_key": self.static_threshold_key,
+                "static_ratio_max": self.static_ratio_max,
                 "static_diff_threshold": self.static_diff_threshold,
+                "data_interrupt_max": self.data_interrupt_max,
                 "max_joint_velocity": self.max_joint_velocity,
+                "grasp_threshold": self.grasp_threshold,
+                "machine_id": self.machine_id,
                 "min_action_duration": self.min_action_duration,
                 "max_nan_ratio": self.max_nan_ratio,
             },
-            "hand_config": {
-                "right": {
-                    "finger_joints": list(self.right_hand_fingers),
-                    "joint_direction_coefficients": self.right_joint_direction_coefficients,
-                },
-                "left": {
-                    "finger_joints": list(self.left_hand_fingers),
-                    "joint_direction_coefficients": self.left_joint_direction_coefficients,
-                },
+            "timing": {
+                "timestamp_monotonic_min": self.timestamp_monotonic_min,
+                "timestamp_gap_tolerance": self.timestamp_gap_tolerance,
+                "timestamp_stability_min": self.timestamp_stability_min,
+                "frequency_tolerance": self.frequency_tolerance,
+                "frequency_consistency_min": self.frequency_consistency_min,
+            },
+            "layered": {
+                "single_data_pass_rate": self.single_data_pass_rate,
+                "invalid_multimodal_max": self.invalid_multimodal_max,
+                "invalid_atomic_skill_max": self.invalid_atomic_skill_max,
+                "smoothness_threshold": self.smoothness_threshold,
+            },
+            "duration_filter": {
+                "duration_min": self.duration_min,
+                "duration_max": self.duration_max,
+                "duration_percentile_min": self.duration_percentile_min,
+                "duration_percentile_max": self.duration_percentile_max,
+            },
+            "runtime": {
+                "enable_cross_episode_checks": self.enable_cross_episode_checks,
             },
         }
 

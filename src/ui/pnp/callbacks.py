@@ -645,7 +645,12 @@ def register_callbacks(app):
     from redis import Redis
     from rq import Queue
 
-    param_keys = list(ValidatorConfig().to_pnp_detection_params().keys())
+    base_pnp_params = ValidatorConfig().to_pnp_detection_params()
+    param_keys = [
+        key
+        for key, value in base_pnp_params.items()
+        if not isinstance(value, dict)
+    ]
     param_states = [State(f"pnp-param-{k}", "value") for k in param_keys]
 
     @app.callback(
@@ -671,7 +676,10 @@ def register_callbacks(app):
 
         if trigger_id == "pnp-open-modal-btn":
             # 组合参数用于显示
-            params_dict = dict(zip(param_keys, param_values))
+            params_dict = {
+                **base_pnp_params,
+                **dict(zip(param_keys, param_values)),
+            }
             display_text = json.dumps(params_dict, indent=2, ensure_ascii=False)
             # dcc.Dropdown 在 multi=True 时 value 必须是 list，否则会导致多选行为异常。
             if is_single:
@@ -754,7 +762,10 @@ def register_callbacks(app):
             sample_ratio = 0
 
         # 获取参数字典
-        params_dict = dict(zip(param_keys, param_values))
+        params_dict = {
+            **base_pnp_params,
+            **dict(zip(param_keys, param_values)),
+        }
 
         try:
             from rq import Queue
