@@ -25,8 +25,8 @@ LEVEL_PRIORITY = {
 }
 LEVEL_MESSAGES = {
     IssueLevel.CRITICAL: "左右手均未检测到抓取片段，判定为任务失败",
-    IssueLevel.MAJOR: "抓取次数小于识别到的最小抓取次数，判定为抓取异常",
-    IssueLevel.MINOR: "抓取次数大于识别到的最小抓取次数 3 次及以上，判定为抓取行为次优",
+    IssueLevel.MAJOR: "抓取次数小于任务要求的最小抓取次数，判定为抓取异常",
+    IssueLevel.MINOR: "抓取次数大于任务要求的最小抓取次数 3 次以上，判定为抓取行为次优",
     IssueLevel.INFO: "抓取行为正常",
 }
 LEVEL_SCORES = {
@@ -39,7 +39,7 @@ HAND_PATTERN = re.compile(
     r"use\s+(left|right|both)\s+hands?\s+to\s+([^;.!?]+)",
     flags=re.IGNORECASE,
 )
-ACTION_PATTERN = re.compile(r"\b(pick|grasp)\b", flags=re.IGNORECASE)
+ACTION_PATTERN = re.compile(r"\b(pick|grasp|take down)\b", flags=re.IGNORECASE)
 
 
 def _normalize_segments(raw_val: Any) -> List[List[float]]:
@@ -139,17 +139,6 @@ def _resolve_episode_duration_from_row(row: pd.Series) -> Optional[float]:
     return None
 
 
-def _minimum_detected_count(values: Iterable[Optional[int]]) -> int:
-    # Ignore zero counts so CRITICAL remains dedicated to "both hands missing",
-    # while MAJOR/MINOR compare against the current episode's positive baseline.
-    positive_counts = [
-        int(value)
-        for value in values
-        if value is not None and int(value) > 0
-    ]
-    return min(positive_counts) if positive_counts else 0
-
-
 def _to_duration_seconds(start_val: Any, end_val: Any) -> Optional[float]:
     try:
         delta = end_val - start_val
@@ -213,14 +202,9 @@ def _build_compact_hand_details(hand_details: Dict[str, Any]) -> Dict[str, Any]:
         "duration_ratio": hand_details.get("duration_ratio"),
         "axis_points": hand_details.get("axis_points", []),
         "axis_score": hand_details.get("axis_score", 0.0),
-        "duration_tag": hand_details.get("duration_tag", "none"),
-        "axis_tag": hand_details.get("axis_tag", "none"),
         "level": hand_details.get("level"),
-        "reason": hand_details.get("reason"),
         "message": hand_details.get("message"),
-        "minimum_detected_count": hand_details.get("minimum_detected_count", 0),
-        "task_required_count": hand_details.get("task_required_count", 0),
-        "count_delta_from_minimum": hand_details.get("count_delta_from_minimum"),
+        "required_count": hand_details.get("required_count", 0),
     }
 
 
@@ -240,17 +224,7 @@ def _build_compact_ee_details(
         "check_name": check_name,
         "issue_level": issue_level,
         "task_description_en": task_context.get("task_description_en", "Unknown task"),
-        "task_required_grasps": task_context.get("task_required_grasps", {}),
-        "minimum_detected_grasps": task_context.get("minimum_detected_grasps", {}),
         "episode_duration": episode_duration,
-        "right_pnp_result": hand_results["right"]["segments"],
-        "left_pnp_result": hand_results["left"]["segments"],
-        "r_count": hand_results["right"]["count"],
-        "l_count": hand_results["left"]["count"],
-        "r_duration": hand_results["right"]["duration_ratio"],
-        "l_duration": hand_results["left"]["duration_ratio"],
-        "r_axis_score": hand_results["right"]["axis_score"],
-        "l_axis_score": hand_results["left"]["axis_score"],
         "hands": {
             hand: _build_compact_hand_details(hand_results.get(hand) or {})
             for hand in HAND_KEYS
@@ -399,50 +373,6 @@ def check_joint_diff_with_slope(
     return joints_satisfied >= min_joints, joints_satisfied
 
 
-def check_sufficient_joint_differences(
-    frame_idx: int,
-    joint_differences: Dict[str, np.ndarray],
-    hand_config: Dict[str, Any],
-) -> bool:
-    return (
-        count_joints_satisfying_diff(
-            frame_idx=frame_idx,
-            joint_differences=joint_differences,
-            hand_config=hand_config,
-        )
-        >= hand_config["min_joints_for_diff"]
-    )
-
-
-def count_joints_satisfying_diff(
-    frame_idx: int,
-    joint_differences: Dict[str, np.ndarray],
-    hand_config: Dict[str, Any],
-) -> int:
-    finger_joints = hand_config["finger_joints"]
-    direction_coefficients = hand_config["joint_direction_coefficients"]
-    negative_diff_threshold = hand_config["negative_diff_threshold"]
-    positive_diff_threshold = hand_config["positive_diff_threshold"]
-
-    joints_satisfied = 0
-    for joint in finger_joints:
-        if joint not in joint_differences:
-            continue
-
-        diffs = joint_differences[joint]
-        coeff = direction_coefficients.get(joint, 0.0)
-        if frame_idx >= len(diffs) or np.isnan(diffs[frame_idx]):
-            continue
-
-        diff_val = diffs[frame_idx]
-        if coeff > 0 and diff_val > positive_diff_threshold:
-            joints_satisfied += 1
-        elif coeff < 0 and diff_val < negative_diff_threshold:
-            joints_satisfied += 1
-
-    return joints_satisfied
-
-
 class EEActionValidator(BaseValidator):
     """末端执行器动作验证器。"""
 
@@ -569,8 +499,8 @@ class EEActionValidator(BaseValidator):
         closure_velocities: np.ndarray,
         state_action_diffs: Dict[str, np.ndarray],
         hand_config: Dict[str, Any],
-        state_df: Optional[pd.DataFrame] = None,
-        action_df: Optional[pd.DataFrame] = None,
+        state_df: pd.DataFrame,
+        action_df: pd.DataFrame,
     ) -> List[Tuple[int, int]]:
         picks: List[Tuple[int, int]] = []
         n_frames = len(closure_degrees)
@@ -586,25 +516,13 @@ class EEActionValidator(BaseValidator):
                 if closure_degrees[i] <= hand_config["pick_closure_threshold"]:
                     continue
 
-                if state_df is not None and action_df is not None:
-                    diff_condition, joints_count = check_joint_diff_with_slope(
-                        i,
-                        state_action_diffs,
-                        state_df,
-                        action_df,
-                        hand_config,
-                    )
-                else:
-                    diff_condition = check_sufficient_joint_differences(
-                        i,
-                        state_action_diffs,
-                        hand_config,
-                    )
-                    joints_count = count_joints_satisfying_diff(
-                        i,
-                        state_action_diffs,
-                        hand_config,
-                    )
+                diff_condition, joints_count = check_joint_diff_with_slope(
+                    i,
+                    state_action_diffs,
+                    state_df,
+                    action_df,
+                    hand_config,
+                )
 
                 if not diff_condition:
                     continue
@@ -641,20 +559,13 @@ class EEActionValidator(BaseValidator):
                 diff_condition_place = True
                 window_end = min(n_frames, i + hand_config["place_diff_lookahead"])
                 for j in range(i, window_end):
-                    if state_df is not None and action_df is not None:
-                        _, joints_count = check_joint_diff_with_slope(
-                            j,
-                            state_action_diffs,
-                            state_df,
-                            action_df,
-                            hand_config,
-                        )
-                    else:
-                        joints_count = count_joints_satisfying_diff(
-                            j,
-                            joint_differences=state_action_diffs,
-                            hand_config=hand_config,
-                        )
+                    _, joints_count = check_joint_diff_with_slope(
+                        j,
+                        state_action_diffs,
+                        state_df,
+                        action_df,
+                        hand_config,
+                    )
 
                     if joints_count >= hand_config["min_joints_for_diff"]:
                         diff_condition_place = False
@@ -781,16 +692,15 @@ class EEActionValidator(BaseValidator):
         task_required_grasps = extract_minimum_grasp_counts(task_description_en)
         detection_details = dict(detection_result.details or {})
         hands = detection_details.get("hands") or {}
-        episode_minimum_detected_count = _minimum_detected_count(
-            [
-                int((hands.get(hand) or {}).get("count") or 0)
-                for hand in HAND_KEYS
-            ]
-        )
+        detected_grasps = {
+            hand: int((hands.get(hand) or {}).get("count") or 0)
+            for hand in HAND_KEYS
+        }
 
         hand_stats = {
             hand: {
-                "minimum_detected_count": episode_minimum_detected_count,
+                "detected_count": detected_grasps[hand],
+                "required_count": int(task_required_grasps.get(hand) or 0),
                 "task_required_count": int(task_required_grasps.get(hand) or 0),
             }
             for hand in HAND_KEYS
@@ -799,10 +709,7 @@ class EEActionValidator(BaseValidator):
         return {
             "task_description_en": task_description_en,
             "task_required_grasps": task_required_grasps,
-            "minimum_detected_grasps": {
-                hand: episode_minimum_detected_count
-                for hand in HAND_KEYS
-            },
+            "detected_grasps": detected_grasps,
             "hand_stats": hand_stats,
         }
 
@@ -814,29 +721,27 @@ class EEActionValidator(BaseValidator):
     ) -> Dict[str, Any]:
         hand_stats = task_context.get("hand_stats", {}).get(hand, {})
         count_val = int(hand_metrics.get("count") or 0)
-        minimum_detected_count = int(hand_stats.get("minimum_detected_count") or 0)
+        detected_count = int(hand_stats.get("detected_count") or 0)
+        required_count = int(hand_stats.get("required_count") or 0)
         task_required_count = int(hand_stats.get("task_required_count") or 0)
-        count_delta_from_minimum = count_val - minimum_detected_count
+        count_delta_from_required = count_val - required_count
 
         level = IssueLevel.INFO
-        reason = "normal"
-        if minimum_detected_count > 0 and count_val < minimum_detected_count:
+        if required_count > 0 and count_val < required_count:
             level = IssueLevel.MAJOR
-            reason = "below_minimum_detected_count"
-        elif count_delta_from_minimum >= 3:
+        elif required_count > 0 and count_delta_from_required > 3:
             level = IssueLevel.MINOR
-            reason = "above_minimum_detected_count_by_3"
 
         return {
             **hand_metrics,
             "duration_tag": "none",
             "axis_tag": "none",
-            "minimum_detected_count": minimum_detected_count,
+            "detected_count": detected_count,
+            "required_count": required_count,
             "task_required_count": task_required_count,
-            "count_delta_from_minimum": count_delta_from_minimum,
+            "count_delta_from_required": count_delta_from_required,
             "level": level.value,
             "message": LEVEL_MESSAGES[level],
-            "reason": reason,
         }
 
     def _detect_episode_result(self, episode_id: str) -> ValidationResult:
@@ -901,7 +806,6 @@ class EEActionValidator(BaseValidator):
             for hand in HAND_KEYS:
                 hand_results[hand]["level"] = issue_level.value
                 hand_results[hand]["message"] = LEVEL_MESSAGES[issue_level]
-                hand_results[hand]["reason"] = "no_detected_segments"
         else:
             issue_level = IssueLevel.INFO
             for hand_result in hand_results.values():
@@ -922,7 +826,7 @@ class EEActionValidator(BaseValidator):
             if majors:
                 issue_value = float(min(int(item.get("count") or 0) for item in majors))
                 issue_threshold = float(
-                    max(int(item.get("minimum_detected_count") or 0) for item in majors)
+                    max(int(item.get("required_count") or 0) for item in majors)
                 )
         elif issue_level == IssueLevel.MINOR:
             minors = [
@@ -933,7 +837,7 @@ class EEActionValidator(BaseValidator):
             if minors:
                 issue_value = float(max(int(item.get("count") or 0) for item in minors))
                 issue_threshold = float(
-                    max(int(item.get("minimum_detected_count") or 0) + 3 for item in minors)
+                    max(int(item.get("required_count") or 0) + 3 for item in minors)
                 )
 
         details = _build_compact_ee_details(

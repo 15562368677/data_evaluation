@@ -249,8 +249,9 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
         try:
             detection_result = stream_validator.validate(episode_id)
             detection_details = detection_result.details or {}
-            right_segments = detection_details.get("right_pnp_result") or []
-            left_segments = detection_details.get("left_pnp_result") or []
+            hands = detection_details.get("hands") or {}
+            right_segments = (hands.get("right") or {}).get("segments") or []
+            left_segments = (hands.get("left") or {}).get("segments") or []
             right_json = json.dumps(right_segments)
             left_json = json.dumps(left_segments)
 

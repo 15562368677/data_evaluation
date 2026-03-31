@@ -1,0 +1,74 @@
+{
+  "passed": true,
+  "score": 100.0,
+  "passed_count": 1,
+  "failed_count": 0,
+  "issues": [
+    {
+      "level": "info",
+      "check_name": "抓取检测",
+      "category": "末端轨迹",
+      "message": "抓取行为正常",
+      "value": null,
+      "threshold": null,
+      "passed": true
+    }
+  ],
+  "category_summary": {
+    "末端轨迹": {
+      "passed": 1,
+      "failed": 0
+    }
+  },
+  "details": {
+    "validator_name": "末端执行器动作验证器",
+    "category": "末端轨迹",
+    "check_name": "抓取检测",
+    "issue_level": "info",
+    "task_description_en": "Use your left hand to open the sliding wardrobe door; squat down; use your right hand to pull out the telescopic clothes rail; use your right hand to take down the denim shirt; twist your torso to the right and put the denim shirt into the laundry basket; use your left hand to push the telescopic clothes rail back into place; stand up; use your right hand to close the sliding wardrobe door.",
+    "episode_duration": 147.056281856,
+    "hands": {
+      "right": {
+        "hand": "right",
+        "count": 2,
+        "segments": [
+          [
+            49.64761,
+            52.992191
+          ],
+          [
+            56.287399,
+            76.00048
+          ]
+        ],
+        "duration_ratio": 0.15679481154418448,
+        "axis_points": [
+          0.3489813549770918,
+          0.4497865624317176
+        ],
+        "axis_score": 0.3993839587044047,
+        "level": "info",
+        "message": "抓取行为正常",
+        "required_count": 0
+      },
+      "left": {
+        "hand": "left",
+        "count": 1,
+        "segments": [
+          [
+            65.296137,
+            93.168609
+          ]
+        ],
+        "duration_ratio": 0.1895360854240365,
+        "axis_points": [
+          0.5387894485023474
+        ],
+        "axis_score": 0.5387894485023474,
+        "level": "info",
+        "message": "抓取行为正常",
+        "required_count": 0
+      }
+    }
+  }
+}

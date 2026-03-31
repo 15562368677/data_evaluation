@@ -8,7 +8,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.acceptance_service.validators import EEActionValidator, ValidatorConfig
 
-DEFAULT_EPISODE_ID = "1049211"
+DEFAULT_EPISODE_ID = "1007316"
 
 
 def main() -> None:
