@@ -961,30 +961,6 @@ class EEActionValidator(BaseValidator):
             details=details,
         )
 
-    def build_stream_summary(self, result: ValidationResult) -> Dict[str, Any]:
-        details = result.details or {}
-        hands = details.get("hands") or {}
-        right = hands.get("right") or {}
-        left = hands.get("left") or {}
-        return {
-            "validator_name": details.get("validator_name"),
-            "category": self.category,
-            "check_name": details.get("check_name"),
-            "passed": bool(result.passed),
-            "issue_level": details.get("issue_level"),
-            "r_count": right.get("count"),
-            "l_count": left.get("count"),
-            "r_duration_tag": right.get("duration_tag"),
-            "l_duration_tag": left.get("duration_tag"),
-            "r_axis_tag": right.get("axis_tag"),
-            "l_axis_tag": left.get("axis_tag"),
-            "minimum_detected_grasps": details.get("minimum_detected_grasps"),
-            "hand_levels": {
-                "right": right.get("level"),
-                "left": left.get("level"),
-            },
-        }
-
     def _resolve_episode_duration(
         self,
         data: Dict[str, Any],

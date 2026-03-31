@@ -14,7 +14,6 @@
 它对外的主要公开入口是：
 
 - `validate(episode_id)`：单条 episode 验证
-- `build_stream_summary(result)`：从结果里提炼简版摘要
 
 外部主要通过这里调用它：
 
@@ -294,13 +293,7 @@
 
 说明：这里决定最终总等级和总分。
 
-### 4.16 `build_stream_summary`
-
-功能：从最终结果里提炼流式摘要。
-
-是否调用：有，外部在 `AcceptanceService.validate_batch()` 中调用。
-
-### 4.17 `validate`
+### 4.16 `validate`
 
 功能：单条 episode 的正式入口。
 

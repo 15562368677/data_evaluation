@@ -102,11 +102,8 @@ class AcceptanceService:
                 {
                     "episode_id": episode_id,
                     "result": result,
-                    "stream_summary": self.validator.build_stream_summary(ee_result),
+                    "stream_summary": ee_result.to_dict(),
                 }
             )
 
         return batch_results
-
-    def build_stream_summary(self, result: ValidationResult) -> Dict[str, Any]:
-        return self.validator.build_stream_summary(result)
