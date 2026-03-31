@@ -164,9 +164,6 @@ class ValidatorConfig:
     min_joints_for_diff: int = 2              # 最少有效关节数：参与差分判断的最小关节数量
     slope_threshold: float = 0.0005           # 斜率阈值：用于判断动作趋势是否足够明显
     slope_lookahead: int = 10                 # 斜率前看窗口：计算趋势斜率时使用的后续帧数
-    count_sigma_k: float = 3.0                # 抓取次数异常阈值系数：跨 episode 次数上界的 sigma 倍数
-    duration_iqr_multiplier: float = 1.5      # 抓取时长异常系数：基于 IQR 的时长离群判定倍数
-    axis_sigma_k: float = 3.0                 # 抓取时机异常阈值系数：时间轴位置离群判定的 sigma 倍数
     hand_config: Dict[str, Dict[str, Any]] = field(default_factory=_default_hand_config)  # 手部关节配置：左右手检测所需关节名与方向系数
 
     # ========== 4.1 视觉数据质量 ==========
@@ -232,55 +229,6 @@ class ValidatorConfig:
     # ========== 运行时开关 ==========
     enable_cross_episode_checks: bool = True
 
-    def get_hand_fingers(self, hand: str) -> List[str]:
-        hand_name = str(hand).lower()
-        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
-        finger_joints = hand_details.get("finger_joints")
-        if isinstance(finger_joints, list):
-            return list(finger_joints)
-        raise ValueError(f"Unsupported hand: {hand}")
-
-    def get_hand_direction_coefficients(self, hand: str) -> Dict[str, float]:
-        hand_name = str(hand).lower()
-        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
-        direction_coefficients = hand_details.get("joint_direction_coefficients")
-        if isinstance(direction_coefficients, dict):
-            return dict(direction_coefficients)
-        raise ValueError(f"Unsupported hand: {hand}")
-
-    def get_hand_detection_config(self, hand: str) -> Dict[str, Any]:
-        hand_name = str(hand).lower()
-        hand_details = dict((self.hand_config or {}).get(hand_name) or {})
-        if not hand_details:
-            raise ValueError(f"Unsupported hand: {hand}")
-        return {
-            **self.to_pnp_detection_params(),
-            "hand": hand_name,
-            **hand_details,
-        }
-
-    def get_all_hand_joints(self) -> List[str]:
-        return self.get_hand_fingers("right") + self.get_hand_fingers("left")
-
-    def to_pnp_detection_params(self) -> Dict[str, Any]:
-        return {
-            "pick_closure_threshold": self.pick_closure_threshold,
-            "pick_start_offset": self.pick_start_offset,
-            "place_closure_threshold": self.place_closure_threshold,
-            "place_velocity_threshold": self.place_velocity_threshold,
-            "place_velocity_lookback": self.place_velocity_lookback,
-            "place_velocity_lookahead": self.place_velocity_lookahead,
-            "place_diff_lookahead": self.place_diff_lookahead,
-            "place_end_offset": self.place_end_offset,
-            "min_segment_duration_seconds": self.min_segment_duration_seconds,
-            "negative_diff_threshold": self.negative_diff_threshold,
-            "positive_diff_threshold": self.positive_diff_threshold,
-            "min_joints_for_diff": self.min_joints_for_diff,
-            "slope_threshold": self.slope_threshold,
-            "slope_lookahead": self.slope_lookahead,
-            "hand_config": self.hand_config,
-        }
-
     def to_dict(self) -> Dict[str, Any]:
         return {
             "visual": {
@@ -309,11 +257,22 @@ class ValidatorConfig:
                 "instruction_avg_max": self.instruction_avg_max,
                 "instruction_ambiguity_threshold": self.instruction_ambiguity_threshold,
             },
-            "pnp_detection": self.to_pnp_detection_params(),
-            "ee_validation": {
-                "count_sigma_k": self.count_sigma_k,
-                "duration_iqr_multiplier": self.duration_iqr_multiplier,
-                "axis_sigma_k": self.axis_sigma_k,
+            "pnp_detection": {
+                "pick_closure_threshold": self.pick_closure_threshold,
+                "pick_start_offset": self.pick_start_offset,
+                "place_closure_threshold": self.place_closure_threshold,
+                "place_velocity_threshold": self.place_velocity_threshold,
+                "place_velocity_lookback": self.place_velocity_lookback,
+                "place_velocity_lookahead": self.place_velocity_lookahead,
+                "place_diff_lookahead": self.place_diff_lookahead,
+                "place_end_offset": self.place_end_offset,
+                "min_segment_duration_seconds": self.min_segment_duration_seconds,
+                "negative_diff_threshold": self.negative_diff_threshold,
+                "positive_diff_threshold": self.positive_diff_threshold,
+                "min_joints_for_diff": self.min_joints_for_diff,
+                "slope_threshold": self.slope_threshold,
+                "slope_lookahead": self.slope_lookahead,
+                "hand_config": self.hand_config,
             },
             "action": {
                 "min_sampling_rate": self.min_sampling_rate,
@@ -372,7 +331,11 @@ class BaseValidator(ABC):
         """验证器分类。"""
 
     @abstractmethod
-    def validate(self, episode_id: str, data: Dict[str, Any]) -> ValidationResult:
+    def validate(
+        self,
+        episode_id: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> ValidationResult:
         """执行验证。"""
 
     def _create_issue(

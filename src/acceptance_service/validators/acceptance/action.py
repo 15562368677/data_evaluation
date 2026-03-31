@@ -31,7 +31,12 @@ class ActionValidator(BaseValidator):
     def category(self) -> str:
         return "动作数据"
 
-    def validate(self, episode_id: str, data: Dict[str, Any]) -> ValidationResult:
+    def validate(
+        self,
+        episode_id: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> ValidationResult:
+        data = data or {}
         issues = []
 
         joint_df, joint_columns, format_type, timestamps = self._load_joint_data(data)

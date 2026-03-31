@@ -645,7 +645,7 @@ def register_callbacks(app):
     from redis import Redis
     from rq import Queue
 
-    base_pnp_params = ValidatorConfig().to_pnp_detection_params()
+    base_pnp_params = ValidatorConfig().to_dict()["pnp_detection"]
     param_keys = [
         key
         for key, value in base_pnp_params.items()

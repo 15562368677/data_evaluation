@@ -5,7 +5,7 @@ import dash_bootstrap_components as dbc
 
 from src.acceptance_service.validators.core.base import ValidatorConfig
 
-PNP_DEFAULT_PARAMS = ValidatorConfig().to_pnp_detection_params()
+PNP_DEFAULT_PARAMS = ValidatorConfig().to_dict()["pnp_detection"]
 
 def layout():
     """PnP 检测页面布局"""

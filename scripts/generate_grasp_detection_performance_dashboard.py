@@ -638,59 +638,22 @@ def profile_episode(
 
 def evaluate_issues(profiles: list[EpisodeProfile], task_descriptions: dict[str, str], validator_config: ValidatorConfig) -> None:
     service = AcceptanceService(config=validator_config)
-    by_task: dict[str, list[EpisodeProfile]] = {}
+    _ = task_descriptions
     for profile in profiles:
-        by_task.setdefault(profile.task_id, []).append(profile)
-
-    for task_id, task_profiles in by_task.items():
-        task_description = task_descriptions.get(task_id, "Unknown task")
-        detection_rows: list[tuple[EpisodeProfile, ValidationResult]] = []
-        for profile in task_profiles:
-            if profile.status != "success":
-                continue
-            issue_prepare_started = time.perf_counter()
-            detection_result = service.validator.validate(
-                profile.episode_id,
-                {
-                    "task_description_en": task_description,
-                    "episode_duration": profile.trajectory_duration_sec,
-                    "right_pnp_result": profile.right_segments,
-                    "left_pnp_result": profile.left_segments,
-                },
-            )
-            profile.issue_prepare_seconds = time.perf_counter() - issue_prepare_started
-            detection_rows.append((profile, detection_result))
-
-        if not detection_rows:
+        if profile.status != "success":
             continue
-
-        issue_context_started = time.perf_counter()
-        task_context = service.build_task_context(
-            task_description_en=task_description,
-            detection_results=[result for _, result in detection_rows],
-        )
-        issue_context_seconds = time.perf_counter() - issue_context_started
-        context_share = issue_context_seconds / len(detection_rows)
-
-        for profile, detection_result in detection_rows:
-            issue_eval_started = time.perf_counter()
-            final_result = service.validate_episode(
-                episode_id=profile.episode_id,
-                payload={
-                    "task_description_en": task_description,
-                    "validation_result": detection_result,
-                },
-                task_context=task_context,
-            )
-            profile.issue_context_seconds = context_share
-            profile.issue_eval_seconds = time.perf_counter() - issue_eval_started
-            profile.total_seconds += profile.issue_prepare_seconds + profile.issue_context_seconds + profile.issue_eval_seconds
-            profile.issue_level = final_result.details.get("issue_level")
-            profile.issue_passed = bool(final_result.passed)
-            issue_message = None
-            if final_result.issues:
-                issue_message = final_result.issues[0].message
-            profile.issue_message = issue_message
+        issue_eval_started = time.perf_counter()
+        final_result = service.validator.validate(profile.episode_id)
+        profile.issue_prepare_seconds = 0.0
+        profile.issue_context_seconds = 0.0
+        profile.issue_eval_seconds = time.perf_counter() - issue_eval_started
+        profile.total_seconds += profile.issue_eval_seconds
+        profile.issue_level = final_result.details.get("issue_level")
+        profile.issue_passed = bool(final_result.passed)
+        issue_message = None
+        if final_result.issues:
+            issue_message = final_result.issues[0].message
+        profile.issue_message = issue_message
 
 
 def sort_task_id(task_id: str) -> tuple[int, int | str]:

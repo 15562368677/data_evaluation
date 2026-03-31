@@ -16,7 +16,7 @@ from src.utils.result_db import (
     save_qc_results,
 )
 from src.utils.data_parser import HAND_JOINT_NAMES, JOINT_NAMES, load_joint_data
-from src.acceptance_service.validators import EEActionValidator, ValidatorConfig, build_task_en
+from src.acceptance_service.validators import EEActionValidator, ValidatorConfig
 
 
 def load_joint_data_as_dfs(episode_id: str, config: ValidatorConfig):
@@ -54,101 +54,11 @@ def load_joint_data_as_dfs(episode_id: str, config: ValidatorConfig):
 
     return state_df, action_df
 
-
-def _normalize_segments(raw_val):
-    if not raw_val:
-        return []
-    parsed = raw_val
-    if isinstance(raw_val, str):
-        try:
-            parsed = json.loads(raw_val)
-        except Exception:
-            return []
-    if not isinstance(parsed, list):
-        return []
-
-    segments = []
-    for seg in parsed:
-        if not isinstance(seg, (list, tuple)) or len(seg) < 2:
-            continue
-        try:
-            st_sec = float(seg[0])
-            ed_sec = float(seg[1])
-        except Exception:
-            continue
-        if ed_sec < st_sec:
-            st_sec, ed_sec = ed_sec, st_sec
-        segments.append([st_sec, ed_sec])
-    return segments
-
-
-def _estimate_duration_from_segments(right_raw, left_raw):
-    max_end = 0.0
-    for raw_val in (right_raw, left_raw):
-        for seg in _normalize_segments(raw_val):
-            max_end = max(max_end, float(seg[1]))
-    return max_end if max_end > 0 else None
-
-
-def _load_task_episode_duration_map(episode_ids):
-    if not episode_ids:
-        return {}
-
-    duration_map = {}
-    meta_df = query_df(
-        """
-        SELECT id, trajectory_duration, trajectory_start, trajectory_end
-        FROM episodes
-        WHERE id IN %s
-        """,
-        (tuple(str(episode_id) for episode_id in episode_ids),),
-    )
-    for _, row in meta_df.iterrows():
-        episode_id = str(row.get("id"))
-        total_sec = None
-        trajectory_duration = row.get("trajectory_duration")
-        try:
-            if trajectory_duration is not None:
-                duration_val = float(trajectory_duration)
-                if duration_val > 0:
-                    total_sec = duration_val
-        except Exception:
-            total_sec = None
-
-        if (
-            (total_sec is None or total_sec <= 0)
-            and pd.notnull(row.get("trajectory_start"))
-            and pd.notnull(row.get("trajectory_end"))
-        ):
-            try:
-                total_sec = float(
-                    (row["trajectory_end"] - row["trajectory_start"]).total_seconds()
-                )
-            except Exception:
-                total_sec = None
-
-        if total_sec is not None and total_sec > 0:
-            duration_map[episode_id] = total_sec
-    return duration_map
-
-
-def _load_task_description_en(task_id: str) -> str:
-    task_df = query_df(
-        "SELECT descriptions FROM tasks WHERE id = %(task_id)s LIMIT 1",
-        {"task_id": task_id},
-    )
-    if task_df.empty:
-        return "Unknown task"
-    return build_task_en(task_df.iloc[0].get("descriptions"))
-
-
-def _rebuild_batch_qc_results(batch_id: str, task_id: str, validator_config: ValidatorConfig):
+def _rebuild_batch_qc_results(batch_id: str, validator_config: ValidatorConfig):
     batch_df = query_pnp_df(
         """
         SELECT
-            s.episode_id,
-            s.right_pnp_result,
-            s.left_pnp_result
+            s.episode_id
         FROM pnp_streams s
         WHERE s.batch_id = %s
         ORDER BY s.episode_id
@@ -158,37 +68,20 @@ def _rebuild_batch_qc_results(batch_id: str, task_id: str, validator_config: Val
     if batch_df.empty:
         return []
 
-    episode_ids = [str(value) for value in batch_df["episode_id"].tolist()]
-    duration_map = _load_task_episode_duration_map(episode_ids)
-    task_description_en = _load_task_description_en(task_id)
-
     episode_payloads = []
     for _, row in batch_df.iterrows():
         episode_id = str(row["episode_id"])
-        right_raw = row.get("right_pnp_result")
-        left_raw = row.get("left_pnp_result")
-        episode_duration = duration_map.get(episode_id)
-        if episode_duration is None:
-            episode_duration = _estimate_duration_from_segments(right_raw, left_raw)
-
         state_df, action_df = load_joint_data_as_dfs(episode_id, validator_config)
-
         episode_payloads.append(
             {
                 "episode_id": episode_id,
-                "episode_duration": episode_duration,
-                "right_pnp_result": right_raw,
-                "left_pnp_result": left_raw,
                 "state_df": state_df,
                 "action_df": action_df,
             }
         )
 
     acceptance_service = AcceptanceService(config=validator_config)
-    return acceptance_service.validate_batch(
-        task_description_en=task_description_en,
-        episodes=episode_payloads,
-    )
+    return acceptance_service.validate_batch(episodes=episode_payloads)
 
 
 def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
@@ -354,37 +247,7 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
             break
 
         try:
-            state_df, action_df = load_joint_data_as_dfs(episode_id, validator_config)
-            if state_df is None or action_df is None or len(state_df) == 0:
-                failed_episodes += 1
-                last_error_message = f"Episode {episode_id} has no valid joint data."
-                with conn.cursor() as cur:
-                    _record_failure(cur, episode_id, last_error_message)
-                    cur.execute(
-                        """
-                        UPDATE pnp_batches
-                        SET failed_episodes = COALESCE(failed_episodes, 0) + 1,
-                            last_heartbeat = CURRENT_TIMESTAMP,
-                            error_message = %s
-                        WHERE uniq_id = %s
-                        """,
-                        (last_error_message, uniq_id),
-                    )
-                conn.commit()
-                continue
-                
-            if 'timestamp_utc' in state_df.columns and not pd.api.types.is_datetime64_any_dtype(state_df['timestamp_utc']):
-                state_df['timestamp_utc'] = pd.to_datetime(state_df['timestamp_utc'], unit='s')
-            if 'timestamp_utc' in action_df.columns and not pd.api.types.is_datetime64_any_dtype(action_df['timestamp_utc']):
-                action_df['timestamp_utc'] = pd.to_datetime(action_df['timestamp_utc'], unit='s')
-
-            detection_result = stream_validator.validate(
-                episode_id,
-                {
-                    "state_df": state_df,
-                    "action_df": action_df,
-                },
-            )
+            detection_result = stream_validator.validate(episode_id)
             detection_details = detection_result.details or {}
             right_segments = detection_details.get("right_pnp_result") or []
             left_segments = detection_details.get("left_pnp_result") or []
@@ -464,7 +327,7 @@ def run_pnp_task(uniq_id, task_id, sample_ratio, overwrite, params_dict):
 
     if final_status in {"success", "partial"} and processed_episodes > 0:
         try:
-            batch_results = _rebuild_batch_qc_results(str(uniq_id), str(task_id), validator_config)
+            batch_results = _rebuild_batch_qc_results(str(uniq_id), validator_config)
             saved_qc_count = save_qc_results(
                 [{"episode_id": item["episode_id"], "result": item["result"]} for item in batch_results]
             )

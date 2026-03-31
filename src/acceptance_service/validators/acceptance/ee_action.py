@@ -10,11 +10,31 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from ..core.base import BaseValidator, ValidationResult
+from src.utils.data_parser import HAND_JOINT_NAMES, JOINT_NAMES, load_joint_data
+
+from ..core.base import BaseValidator, IssueLevel, ValidationResult
 
 logger = logging.getLogger(__name__)
 
 HAND_KEYS = ("right", "left")
+LEVEL_PRIORITY = {
+    IssueLevel.CRITICAL: 4,
+    IssueLevel.MAJOR: 3,
+    IssueLevel.MINOR: 2,
+    IssueLevel.INFO: 1,
+}
+LEVEL_MESSAGES = {
+    IssueLevel.CRITICAL: "左右手均未检测到抓取片段，判定为任务失败",
+    IssueLevel.MAJOR: "抓取次数小于识别到的最小抓取次数，判定为抓取异常",
+    IssueLevel.MINOR: "抓取次数大于识别到的最小抓取次数 3 次及以上，判定为抓取行为次优",
+    IssueLevel.INFO: "抓取行为正常",
+}
+LEVEL_SCORES = {
+    IssueLevel.CRITICAL: 0.0,
+    IssueLevel.MAJOR: 50.0,
+    IssueLevel.MINOR: 80.0,
+    IssueLevel.INFO: 100.0,
+}
 HAND_PATTERN = re.compile(
     r"use\s+(left|right|both)\s+hands?\s+to\s+([^;.!?]+)",
     flags=re.IGNORECASE,
@@ -97,6 +117,39 @@ def _estimate_duration_from_segments(*raw_values: Any) -> Optional[float]:
     return max_end if max_end > 0 else None
 
 
+def _resolve_episode_duration_from_row(row: pd.Series) -> Optional[float]:
+    trajectory_duration = row.get("trajectory_duration")
+    try:
+        if trajectory_duration is not None:
+            duration_val = float(trajectory_duration)
+            if duration_val > 0:
+                return duration_val
+    except Exception:
+        pass
+
+    trajectory_start = row.get("trajectory_start")
+    trajectory_end = row.get("trajectory_end")
+    if pd.notnull(trajectory_start) and pd.notnull(trajectory_end):
+        try:
+            duration_val = float((trajectory_end - trajectory_start).total_seconds())
+            if duration_val > 0:
+                return duration_val
+        except Exception:
+            return None
+    return None
+
+
+def _minimum_detected_count(values: Iterable[Optional[int]]) -> int:
+    # Ignore zero counts so CRITICAL remains dedicated to "both hands missing",
+    # while MAJOR/MINOR compare against the current episode's positive baseline.
+    positive_counts = [
+        int(value)
+        for value in values
+        if value is not None and int(value) > 0
+    ]
+    return min(positive_counts) if positive_counts else 0
+
+
 def _to_duration_seconds(start_val: Any, end_val: Any) -> Optional[float]:
     try:
         delta = end_val - start_val
@@ -150,6 +203,59 @@ def extract_minimum_grasp_counts(task_description_en: str) -> Dict[str, int]:
             counts[hand_name] += increment
 
     return counts
+
+
+def _build_compact_hand_details(hand_details: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "hand": hand_details.get("hand"),
+        "count": hand_details.get("count", 0),
+        "segments": hand_details.get("segments", []),
+        "duration_ratio": hand_details.get("duration_ratio"),
+        "axis_points": hand_details.get("axis_points", []),
+        "axis_score": hand_details.get("axis_score", 0.0),
+        "duration_tag": hand_details.get("duration_tag", "none"),
+        "axis_tag": hand_details.get("axis_tag", "none"),
+        "level": hand_details.get("level"),
+        "reason": hand_details.get("reason"),
+        "message": hand_details.get("message"),
+        "minimum_detected_count": hand_details.get("minimum_detected_count", 0),
+        "task_required_count": hand_details.get("task_required_count", 0),
+        "count_delta_from_minimum": hand_details.get("count_delta_from_minimum"),
+    }
+
+
+def _build_compact_ee_details(
+    *,
+    task_context: Dict[str, Any],
+    hand_results: Dict[str, Dict[str, Any]],
+    issue_level: str,
+    episode_duration: Optional[float],
+    validator_name: str,
+    category: str,
+    check_name: str,
+) -> Dict[str, Any]:
+    return {
+        "validator_name": validator_name,
+        "category": category,
+        "check_name": check_name,
+        "issue_level": issue_level,
+        "task_description_en": task_context.get("task_description_en", "Unknown task"),
+        "task_required_grasps": task_context.get("task_required_grasps", {}),
+        "minimum_detected_grasps": task_context.get("minimum_detected_grasps", {}),
+        "episode_duration": episode_duration,
+        "right_pnp_result": hand_results["right"]["segments"],
+        "left_pnp_result": hand_results["left"]["segments"],
+        "r_count": hand_results["right"]["count"],
+        "l_count": hand_results["left"]["count"],
+        "r_duration": hand_results["right"]["duration_ratio"],
+        "l_duration": hand_results["left"]["duration_ratio"],
+        "r_axis_score": hand_results["right"]["axis_score"],
+        "l_axis_score": hand_results["left"]["axis_score"],
+        "hands": {
+            hand: _build_compact_hand_details(hand_results.get(hand) or {})
+            for hand in HAND_KEYS
+        },
+    }
 
 
 def calculate_closure_degree(
@@ -348,6 +454,114 @@ class EEActionValidator(BaseValidator):
     def category(self) -> str:
         return "末端轨迹"
 
+    def _load_episode_context(self, episode_id: str) -> Dict[str, Any]:
+        from src.utils.source_db import query_df
+
+        episode_df = query_df(
+            """
+            SELECT
+                e.id,
+                e.task_id,
+                e.trajectory_duration,
+                e.trajectory_start,
+                e.trajectory_end,
+                t.descriptions,
+                s.file_path
+            FROM episodes e
+            LEFT JOIN tasks t
+                ON t.id = e.task_id
+            LEFT JOIN streams s
+                ON s.episode_id = e.id
+               AND s.stream_name = 'rgb'
+            WHERE e.id = %(episode_id)s
+            LIMIT 1
+            """,
+            {"episode_id": episode_id},
+        )
+        if episode_df.empty:
+            raise ValueError(f"Episode {episode_id} not found in source DB.")
+
+        row = episode_df.iloc[0]
+        file_path = row.get("file_path")
+        if not file_path:
+            raise ValueError(f"Episode {episode_id} has no rgb stream file_path.")
+
+        return {
+            "episode_id": str(row.get("id")),
+            "task_id": str(row.get("task_id") or ""),
+            "file_path": str(file_path),
+            "task_description_en": build_task_en(row.get("descriptions")),
+            "episode_duration": _resolve_episode_duration_from_row(row),
+        }
+
+    def _normalize_timestamp_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        result = df.copy()
+        if "timestamp_utc" in result.columns and not pd.api.types.is_datetime64_any_dtype(result["timestamp_utc"]):
+            result["timestamp_utc"] = pd.to_datetime(result["timestamp_utc"], unit="s")
+        return result
+
+    def _load_joint_data_as_dfs(self, file_path: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        parsed_data = load_joint_data(file_path)
+        if not parsed_data:
+            raise ValueError(f"Failed to load joint data from file_path={file_path}")
+
+        all_joints = list(JOINT_NAMES) + list(HAND_JOINT_NAMES)
+
+        state_df = pd.DataFrame({"timestamp_utc": parsed_data.get("absolute_timestamps_state", [])})
+        for joint in all_joints:
+            if joint in parsed_data.get("state", {}):
+                state_df[joint] = parsed_data["state"][joint]
+            else:
+                state_df[joint] = np.nan
+
+        action_df = pd.DataFrame({"timestamp_utc": parsed_data.get("absolute_timestamps_action", [])})
+        for joint in all_joints:
+            if joint in parsed_data.get("action", {}):
+                action_df[joint] = parsed_data["action"][joint]
+            else:
+                action_df[joint] = np.nan
+
+        if len(state_df) == 0 or len(action_df) == 0:
+            raise ValueError(f"Episode joint data is empty for file_path={file_path}")
+
+        return self._normalize_timestamp_df(state_df), self._normalize_timestamp_df(action_df)
+
+    def _load_validation_data(self, episode_id: str) -> Dict[str, Any]:
+        context = self._load_episode_context(episode_id)
+        state_df, action_df = self._load_joint_data_as_dfs(context["file_path"])
+        return {
+            **context,
+            "state_df": state_df,
+            "action_df": action_df,
+        }
+
+    def _build_hand_detection_config(self, hand: str) -> Dict[str, Any]:
+        hand_name = str(hand).lower()
+        hand_details = dict((self.config.hand_config or {}).get(hand_name) or {})
+        finger_joints = hand_details.get("finger_joints")
+        direction_coefficients = hand_details.get("joint_direction_coefficients")
+        if not isinstance(finger_joints, list) or not isinstance(direction_coefficients, dict):
+            raise ValueError(f"Unsupported hand: {hand}")
+        return {
+            "pick_closure_threshold": self.config.pick_closure_threshold,
+            "pick_start_offset": self.config.pick_start_offset,
+            "place_closure_threshold": self.config.place_closure_threshold,
+            "place_velocity_threshold": self.config.place_velocity_threshold,
+            "place_velocity_lookback": self.config.place_velocity_lookback,
+            "place_velocity_lookahead": self.config.place_velocity_lookahead,
+            "place_diff_lookahead": self.config.place_diff_lookahead,
+            "place_end_offset": self.config.place_end_offset,
+            "min_segment_duration_seconds": self.config.min_segment_duration_seconds,
+            "negative_diff_threshold": self.config.negative_diff_threshold,
+            "positive_diff_threshold": self.config.positive_diff_threshold,
+            "min_joints_for_diff": self.config.min_joints_for_diff,
+            "slope_threshold": self.config.slope_threshold,
+            "slope_lookahead": self.config.slope_lookahead,
+            "hand": hand_name,
+            "finger_joints": list(finger_joints),
+            "joint_direction_coefficients": dict(direction_coefficients),
+        }
+
     @classmethod
     def detect_pick_segments(
         cls,
@@ -464,7 +678,7 @@ class EEActionValidator(BaseValidator):
         hand: str,
     ) -> List[List[float]]:
         hand_name = str(hand).lower()
-        hand_config = self.config.get_hand_detection_config(hand_name)
+        hand_config = self._build_hand_detection_config(hand_name)
         sorted_state_df = state_df.sort_values("timestamp_utc")
         sorted_action_df = action_df.sort_values("timestamp_utc")
         closure_df = calculate_closure_metrics_from_dataframe(
@@ -559,6 +773,218 @@ class EEActionValidator(BaseValidator):
             "axis_score": axis_score,
         }
 
+    def build_task_context(
+        self,
+        task_description_en: str,
+        detection_result: ValidationResult,
+    ) -> Dict[str, Any]:
+        task_required_grasps = extract_minimum_grasp_counts(task_description_en)
+        detection_details = dict(detection_result.details or {})
+        hands = detection_details.get("hands") or {}
+        episode_minimum_detected_count = _minimum_detected_count(
+            [
+                int((hands.get(hand) or {}).get("count") or 0)
+                for hand in HAND_KEYS
+            ]
+        )
+
+        hand_stats = {
+            hand: {
+                "minimum_detected_count": episode_minimum_detected_count,
+                "task_required_count": int(task_required_grasps.get(hand) or 0),
+            }
+            for hand in HAND_KEYS
+        }
+
+        return {
+            "task_description_en": task_description_en,
+            "task_required_grasps": task_required_grasps,
+            "minimum_detected_grasps": {
+                hand: episode_minimum_detected_count
+                for hand in HAND_KEYS
+            },
+            "hand_stats": hand_stats,
+        }
+
+    def _evaluate_hand(
+        self,
+        hand: str,
+        hand_metrics: Dict[str, Any],
+        task_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        hand_stats = task_context.get("hand_stats", {}).get(hand, {})
+        count_val = int(hand_metrics.get("count") or 0)
+        minimum_detected_count = int(hand_stats.get("minimum_detected_count") or 0)
+        task_required_count = int(hand_stats.get("task_required_count") or 0)
+        count_delta_from_minimum = count_val - minimum_detected_count
+
+        level = IssueLevel.INFO
+        reason = "normal"
+        if minimum_detected_count > 0 and count_val < minimum_detected_count:
+            level = IssueLevel.MAJOR
+            reason = "below_minimum_detected_count"
+        elif count_delta_from_minimum >= 3:
+            level = IssueLevel.MINOR
+            reason = "above_minimum_detected_count_by_3"
+
+        return {
+            **hand_metrics,
+            "duration_tag": "none",
+            "axis_tag": "none",
+            "minimum_detected_count": minimum_detected_count,
+            "task_required_count": task_required_count,
+            "count_delta_from_minimum": count_delta_from_minimum,
+            "level": level.value,
+            "message": LEVEL_MESSAGES[level],
+            "reason": reason,
+        }
+
+    def _detect_episode_result(self, episode_id: str) -> ValidationResult:
+        validation_data = self._load_validation_data(episode_id)
+        task_description_en = str(validation_data.get("task_description_en") or "Unknown task")
+        state_df = validation_data["state_df"]
+        action_df = validation_data["action_df"]
+        hand_segments = {
+            hand: self._detect_hand_segments(state_df, action_df, hand)
+            for hand in HAND_KEYS
+        }
+
+        episode_duration = self._resolve_episode_duration(validation_data, hand_segments)
+        hand_results = {
+            hand: self._build_hand_details(hand, hand_segments[hand], episode_duration)
+            for hand in HAND_KEYS
+        }
+
+        return ValidationResult(
+            passed=True,
+            score=None,
+            issues=[],
+            details={
+                "episode_id": episode_id,
+                "task_id": validation_data.get("task_id"),
+                "file_path": validation_data.get("file_path"),
+                "validator_name": self.name,
+                "category": self.category,
+                "check_name": "抓取检测",
+                "task_description_en": task_description_en,
+                "episode_duration": episode_duration,
+                "right_pnp_result": hand_results["right"]["segments"],
+                "left_pnp_result": hand_results["left"]["segments"],
+                "r_count": hand_results["right"]["count"],
+                "l_count": hand_results["left"]["count"],
+                "r_duration": hand_results["right"]["duration_ratio"],
+                "l_duration": hand_results["left"]["duration_ratio"],
+                "r_axis_score": hand_results["right"]["axis_score"],
+                "l_axis_score": hand_results["left"]["axis_score"],
+                "hands": hand_results,
+            },
+        )
+
+    def _finalize_episode_result(
+        self,
+        detection_result: ValidationResult,
+        task_context: Dict[str, Any],
+    ) -> ValidationResult:
+        detection_details = dict(detection_result.details or {})
+        raw_hands = detection_details.get("hands") or {}
+        hand_results = {
+            hand: self._evaluate_hand(
+                hand=hand,
+                hand_metrics=raw_hands.get(hand) or {},
+                task_context=task_context,
+            )
+            for hand in HAND_KEYS
+        }
+
+        if all(int(hand_results[hand].get("count") or 0) == 0 for hand in HAND_KEYS):
+            issue_level = IssueLevel.CRITICAL
+            for hand in HAND_KEYS:
+                hand_results[hand]["level"] = issue_level.value
+                hand_results[hand]["message"] = LEVEL_MESSAGES[issue_level]
+                hand_results[hand]["reason"] = "no_detected_segments"
+        else:
+            issue_level = IssueLevel.INFO
+            for hand_result in hand_results.values():
+                candidate_level = IssueLevel(str(hand_result.get("level") or IssueLevel.INFO.value))
+                if LEVEL_PRIORITY[candidate_level] > LEVEL_PRIORITY[issue_level]:
+                    issue_level = candidate_level
+
+        issue_value = None
+        issue_threshold = None
+        if issue_level == IssueLevel.CRITICAL:
+            issue_value = 0.0
+        elif issue_level == IssueLevel.MAJOR:
+            majors = [
+                hand_result
+                for hand_result in hand_results.values()
+                if hand_result.get("level") == IssueLevel.MAJOR.value
+            ]
+            if majors:
+                issue_value = float(min(int(item.get("count") or 0) for item in majors))
+                issue_threshold = float(
+                    max(int(item.get("minimum_detected_count") or 0) for item in majors)
+                )
+        elif issue_level == IssueLevel.MINOR:
+            minors = [
+                hand_result
+                for hand_result in hand_results.values()
+                if hand_result.get("level") == IssueLevel.MINOR.value
+            ]
+            if minors:
+                issue_value = float(max(int(item.get("count") or 0) for item in minors))
+                issue_threshold = float(
+                    max(int(item.get("minimum_detected_count") or 0) + 3 for item in minors)
+                )
+
+        details = _build_compact_ee_details(
+            task_context=task_context,
+            hand_results=hand_results,
+            issue_level=issue_level.value,
+            episode_duration=detection_details.get("episode_duration"),
+            validator_name=self.name,
+            category=self.category,
+            check_name="抓取检测",
+        )
+        issue = self._create_issue(
+            check_name="抓取检测",
+            message=LEVEL_MESSAGES[issue_level],
+            passed=issue_level != IssueLevel.CRITICAL,
+            level=issue_level,
+            value=issue_value,
+            threshold=issue_threshold,
+        )
+
+        return ValidationResult(
+            passed=issue_level != IssueLevel.CRITICAL,
+            score=LEVEL_SCORES[issue_level],
+            issues=[issue],
+            details=details,
+        )
+
+    def build_stream_summary(self, result: ValidationResult) -> Dict[str, Any]:
+        details = result.details or {}
+        hands = details.get("hands") or {}
+        right = hands.get("right") or {}
+        left = hands.get("left") or {}
+        return {
+            "validator_name": details.get("validator_name"),
+            "category": self.category,
+            "check_name": details.get("check_name"),
+            "passed": bool(result.passed),
+            "issue_level": details.get("issue_level"),
+            "r_count": right.get("count"),
+            "l_count": left.get("count"),
+            "r_duration_tag": right.get("duration_tag"),
+            "l_duration_tag": left.get("duration_tag"),
+            "r_axis_tag": right.get("axis_tag"),
+            "l_axis_tag": left.get("axis_tag"),
+            "minimum_detected_grasps": details.get("minimum_detected_grasps"),
+            "hand_levels": {
+                "right": right.get("level"),
+                "left": left.get("level"),
+            },
+        }
+
     def _resolve_episode_duration(
         self,
         data: Dict[str, Any],
@@ -585,45 +1011,22 @@ class EEActionValidator(BaseValidator):
             hand_segments.get("left"),
         )
 
-    def validate(self, episode_id: str, data: Dict[str, Any]) -> ValidationResult:
-        task_description_en = str(data.get("task_description_en") or "Unknown task")
-        hand_segments: Dict[str, List[List[float]]] = {}
-
-        state_df = data.get("state_df")
-        action_df = data.get("action_df")
-        if isinstance(state_df, pd.DataFrame) and isinstance(action_df, pd.DataFrame):
-            for hand in HAND_KEYS:
-                hand_segments[hand] = self._detect_hand_segments(state_df, action_df, hand)
-        else:
-            for hand in HAND_KEYS:
-                hand_segments[hand] = _normalize_segments(data.get(f"{hand}_pnp_result"))
-
-        episode_duration = self._resolve_episode_duration(data, hand_segments)
-        hand_results = {
-            hand: self._build_hand_details(hand, hand_segments[hand], episode_duration)
-            for hand in HAND_KEYS
-        }
-
-        details = {
-            "validator_name": self.name,
-            "category": self.category,
-            "check_name": "抓取检测",
-            "task_description_en": task_description_en,
-            "episode_duration": episode_duration,
-            "right_pnp_result": hand_results["right"]["segments"],
-            "left_pnp_result": hand_results["left"]["segments"],
-            "r_count": hand_results["right"]["count"],
-            "l_count": hand_results["left"]["count"],
-            "r_duration": hand_results["right"]["duration_ratio"],
-            "l_duration": hand_results["left"]["duration_ratio"],
-            "r_axis_score": hand_results["right"]["axis_score"],
-            "l_axis_score": hand_results["left"]["axis_score"],
-            "hands": hand_results,
-        }
-
-        return ValidationResult(
-            passed=True,
-            score=None,
-            issues=[],
-            details=details,
+    def validate(
+        self,
+        episode_id: str,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> ValidationResult:
+        detection_result = self._detect_episode_result(episode_id)
+        task_context = (data or {}).get("task_context")
+        if not isinstance(task_context, dict):
+            task_context = self.build_task_context(
+                task_description_en=str(
+                    detection_result.details.get("task_description_en")
+                    or "Unknown task"
+                ),
+                detection_result=detection_result,
+            )
+        return self._finalize_episode_result(
+            detection_result=detection_result,
+            task_context=task_context,
         )
